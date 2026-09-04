@@ -169,8 +169,18 @@ pub fn parse_challenge_url(challenge_url: impl IntoUrl) -> Result<Challenge, App
 		.captures(url.as_str())
 		.ok_or(ApproverError::InvalidChallengeUrl)?;
 
-	let version = captures[1].parse().expect("regex should only match digits");
-	let client_id = captures[2].parse().expect("regex should only match digits");
+	let version = captures
+		.get(1)
+		.ok_or(ApproverError::InvalidChallengeUrl)?
+		.as_str()
+		.parse()
+		.map_err(|_| ApproverError::InvalidChallengeUrl)?;
+	let client_id = captures
+		.get(2)
+		.ok_or(ApproverError::InvalidChallengeUrl)?
+		.as_str()
+		.parse()
+		.map_err(|_| ApproverError::InvalidChallengeUrl)?;
 
 	Ok(Challenge { version, client_id })
 }
@@ -269,6 +279,8 @@ mod tests {
 			"https://s.team/q/1/123asdf",
 			"https://s.team/q/a/123",
 			"https://s.team/q/123a/123",
+			"https://s.team/q/999999999999999999999999/1",
+			"https://s.team/q/1/999999999999999999999999999999999999999999999999",
 		];
 		for url in urls {
 			let challenge = parse_challenge_url(url);

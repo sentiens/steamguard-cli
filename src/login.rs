@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use anyhow::Context;
 use log::*;
 use secrecy::{ExposeSecret, SecretString};
 use steamguard::{
@@ -62,7 +63,11 @@ pub fn do_login<T: Transport + Clone>(
 		password,
 		Some(account),
 	)?;
-	let steam_id = tokens.access_token().decode()?.steam_id();
+	let steam_id = tokens
+		.access_token()
+		.decode()?
+		.try_steam_id()
+		.context("reading Steam ID from access token")?;
 	account.set_tokens(tokens);
 	account.steam_id = steam_id;
 	Ok(())

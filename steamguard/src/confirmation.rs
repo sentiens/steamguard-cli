@@ -3,7 +3,7 @@ use std::{borrow::Cow, fmt};
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use log::*;
-use reqwest::{cookie::CookieStore, Url};
+use reqwest::{cookie::CookieStore, header::HeaderValue};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 use sha1::Sha1;
@@ -39,8 +39,8 @@ where
 		&'q self,
 		tag: &'q str,
 		time: u64,
-	) -> Vec<(&'static str, Cow<'q, str>)> {
-		[
+	) -> anyhow::Result<Vec<(&'static str, Cow<'q, str>)>> {
+		Ok([
 			("p", self.account.device_id.as_str().into()),
 			("a", self.account.steam_id.to_string().into()),
 			(
@@ -49,20 +49,26 @@ where
 					time,
 					tag,
 					self.account.identity_secret.expose_secret(),
-				)
+				)?
 				.into(),
 			),
 			("t", time.to_string().into()),
 			("m", "react".into()),
 			("tag", tag.into()),
 		]
-		.into()
+		.into())
 	}
 
-	fn build_cookie_jar(&self) -> anyhow::Result<(reqwest::cookie::Jar, Url)> {
+	fn build_cookie_header(&self) -> Result<String, ConfirmerError> {
 		let cookie_url = endpoints::community_url("")?;
 		let cookies = reqwest::cookie::Jar::default();
-		let tokens = self.account.tokens.as_ref().unwrap();
+		let tokens = self
+			.account
+			.tokens
+			.as_ref()
+			.ok_or(ConfirmerError::InvalidTokens)?;
+		HeaderValue::from_str(tokens.access_token().expose_secret())
+			.map_err(|_| ConfirmerError::InvalidCookieHeader)?;
 		cookies.add_cookie_str("dob=", &cookie_url);
 		cookies.add_cookie_str(
 			format!("steamid={}", self.account.steam_id).as_str(),
@@ -77,21 +83,25 @@ where
 			.as_str(),
 			&cookie_url,
 		);
-		Ok((cookies, cookie_url))
+		let cookie = cookies
+			.cookies(&cookie_url)
+			.ok_or(ConfirmerError::InvalidCookieHeader)?;
+		let cookie = cookie
+			.to_str()
+			.map_err(|_| ConfirmerError::InvalidCookieHeader)?;
+		Ok(cookie.to_owned())
 	}
 
 	pub fn get_confirmations(&self) -> Result<Vec<Confirmation>, ConfirmerError> {
-		let (cookies, cookie_url) = self.build_cookie_jar()?;
-		let cookie = cookies.cookies(&cookie_url).unwrap();
-		let cookie = cookie.to_str().unwrap();
+		let cookie = self.build_cookie_header()?;
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
-		let query_params = self.get_confirmation_query_params("conf", time);
+		let query_params = self.get_confirmation_query_params("conf", time)?;
 		let resp = self.transport.send_web(WebRequest::new(
 			WebEndpoint::ConfirmationList,
 			&query_params,
 			CONFIRMATION_USER_AGENT,
-			cookie,
+			&cookie,
 			ACCEPT_LANGUAGE,
 		))?;
 
@@ -128,12 +138,10 @@ where
 		let conf = conf.into();
 		let operation = action.to_operation();
 
-		let (cookies, cookie_url) = self.build_cookie_jar()?;
-		let cookie = cookies.cookies(&cookie_url).unwrap();
-		let cookie = cookie.to_str().unwrap();
+		let cookie = self.build_cookie_header()?;
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
-		let mut query_params = self.get_confirmation_query_params("conf", time);
+		let mut query_params = self.get_confirmation_query_params("conf", time)?;
 		query_params.push(("op", operation.into()));
 		query_params.push(("cid", Cow::Borrowed(conf.id)));
 		query_params.push(("ck", Cow::Borrowed(conf.nonce)));
@@ -143,7 +151,7 @@ where
 				WebEndpoint::ConfirmationAction,
 				&query_params,
 				CONFIRMATION_USER_AGENT,
-				cookie,
+				&cookie,
 				ACCEPT_LANGUAGE,
 			)
 			.with_origin(endpoints::community_base_url()),
@@ -210,12 +218,10 @@ where
 		}
 		let operation = action.to_operation();
 
-		let (cookies, cookie_url) = self.build_cookie_jar()?;
-		let cookie = cookies.cookies(&cookie_url).unwrap();
-		let cookie = cookie.to_str().unwrap();
+		let cookie = self.build_cookie_header()?;
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
-		let mut query_params = self.get_confirmation_query_params("conf", time);
+		let mut query_params = self.get_confirmation_query_params("conf", time)?;
 		query_params.push(("op", operation.into()));
 		for conf in confs.iter() {
 			let conf = conf.into();
@@ -235,7 +241,7 @@ where
 				WebEndpoint::ConfirmationBulkAction,
 				&no_query,
 				CONFIRMATION_USER_AGENT,
-				cookie,
+				&cookie,
 				ACCEPT_LANGUAGE,
 			)
 			.with_origin(endpoints::community_base_url())
@@ -337,18 +343,16 @@ where
 			pub html: String,
 		}
 
-		let (cookies, cookie_url) = self.build_cookie_jar()?;
-		let cookie = cookies.cookies(&cookie_url).unwrap();
-		let cookie = cookie.to_str().unwrap();
+		let cookie = self.build_cookie_header()?;
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
-		let query_params = self.get_confirmation_query_params("details", time);
+		let query_params = self.get_confirmation_query_params("details", time)?;
 
 		let resp = self.transport.send_web(WebRequest::new(
 			WebEndpoint::ConfirmationDetails(conf.into().id),
 			&query_params,
 			CONFIRMATION_USER_AGENT,
-			cookie,
+			&cookie,
 			ACCEPT_LANGUAGE,
 		))?;
 
@@ -380,6 +384,8 @@ impl ConfirmationAction {
 pub enum ConfirmerError {
 	#[error("Invalid tokens, login or token refresh required.")]
 	InvalidTokens,
+	#[error("Could not build the Steam Community cookie header")]
+	InvalidCookieHeader,
 	#[error("Network failure: {0}")]
 	NetworkFailure(#[from] NetworkError),
 	#[error("Failed to deserialize response: {0}")]
@@ -550,16 +556,14 @@ fn generate_confirmation_hash_for_time(
 	time: u64,
 	tag: &str,
 	identity_secret: impl AsRef<[u8]>,
-) -> String {
-	let decode: &[u8] = &base64::engine::general_purpose::STANDARD
-		.decode(identity_secret)
-		.unwrap();
-	let mut mac = Hmac::<Sha1>::new_from_slice(decode).unwrap();
+) -> anyhow::Result<String> {
+	let decode = base64::engine::general_purpose::STANDARD.decode(identity_secret)?;
+	let mut mac = Hmac::<Sha1>::new_from_slice(&decode)?;
 	mac.update(&build_time_bytes(time));
 	mac.update(tag.as_bytes());
 	let result = mac.finalize();
 	let hash = result.into_bytes();
-	base64::engine::general_purpose::STANDARD.encode(hash)
+	Ok(base64::engine::general_purpose::STANDARD.encode(hash))
 }
 
 #[cfg(test)]
@@ -616,9 +620,47 @@ mod tests {
 	#[test]
 	fn test_generate_confirmation_hash_for_time() {
 		assert_eq!(
-			generate_confirmation_hash_for_time(1617591917, "conf", "GQP46b73Ws7gr8GmZFR0sDuau5c="),
+			generate_confirmation_hash_for_time(1617591917, "conf", "GQP46b73Ws7gr8GmZFR0sDuau5c=")
+				.unwrap(),
 			String::from("NaL8EIMhfy/7vBounJ0CvpKbrPk=")
 		);
+	}
+
+	#[test]
+	fn malformed_confirmation_credentials_return_errors() {
+		let transport = crate::transport::WebApiTransport::new(
+			reqwest::blocking::Client::builder()
+				.no_proxy()
+				.build()
+				.unwrap(),
+		);
+		let account = SteamGuardAccount::default();
+		let confirmer = Confirmer::new(transport, &account);
+
+		assert!(matches!(
+			confirmer.build_cookie_header(),
+			Err(ConfirmerError::InvalidTokens)
+		));
+		assert!(generate_confirmation_hash_for_time(1, "conf", "not-base64").is_err());
+
+		let account = SteamGuardAccount {
+			tokens: Some(crate::token::Tokens::new(
+				"malformed\naccess-token".to_owned(),
+				"refresh-token".to_owned(),
+			)),
+			..SteamGuardAccount::default()
+		};
+		let transport = crate::transport::WebApiTransport::new(
+			reqwest::blocking::Client::builder()
+				.no_proxy()
+				.build()
+				.unwrap(),
+		);
+		let confirmer = Confirmer::new(transport, &account);
+		assert!(matches!(
+			confirmer.build_cookie_header(),
+			Err(ConfirmerError::InvalidCookieHeader)
+		));
 	}
 
 	#[test]

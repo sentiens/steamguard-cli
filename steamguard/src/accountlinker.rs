@@ -1,6 +1,8 @@
 use crate::protobufs::service_twofactor::{
+	CRemoveAuthenticatorViaChallengeContinue_Replacement_Token,
 	CTwoFactor_AddAuthenticator_Request, CTwoFactor_FinalizeAddAuthenticator_Request,
 	CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Request,
+	CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Response,
 	CTwoFactor_RemoveAuthenticatorViaChallengeStart_Request,
 	CTwoFactor_RemoveAuthenticator_Request, CTwoFactor_Status_Request, CTwoFactor_Status_Response,
 };
@@ -47,7 +49,8 @@ where
 		let steam_id = access_token
 			.decode()
 			.context("decoding access token")?
-			.steam_id();
+			.try_steam_id()
+			.context("reading Steam ID from access token")?;
 
 		let mut req = CTwoFactor_AddAuthenticator_Request::new();
 		req.set_authenticator_type(1);
@@ -76,7 +79,8 @@ where
 			serial_number: resp.serial_number().to_string(),
 			revocation_code: resp.take_revocation_code().into(),
 			uri: resp.take_uri().into(),
-			shared_secret: TwoFactorSecret::from_bytes(resp.take_shared_secret()),
+			shared_secret: TwoFactorSecret::try_from_bytes(resp.take_shared_secret())
+				.context("reading shared secret from add-authenticator response")?,
 			token_gid: resp.take_token_gid(),
 			identity_secret: base64::engine::general_purpose::STANDARD
 				.encode(resp.take_identity_secret())
@@ -203,7 +207,8 @@ where
 		let steam_id = access_token
 			.decode()
 			.context("decoding access token")?
-			.steam_id();
+			.try_steam_id()
+			.context("reading Steam ID from access token")?;
 		let mut req = CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Request::new();
 		req.set_sms_code(sms_code.as_ref().to_owned());
 		req.set_generate_new_token(true);
@@ -214,15 +219,16 @@ where
 		if resp.result != EResult::OK {
 			return Err(resp.result.into());
 		}
-		let resp = resp.into_response_data();
-		let mut resp = resp.replacement_token.clone().unwrap();
+		let mut resp = resp.into_response_data();
+		let mut resp = take_replacement_token(&mut resp)?;
 		let account = SteamGuardAccount {
 			account_name: resp.take_account_name(),
 			steam_id,
 			serial_number: resp.serial_number().to_string(),
 			revocation_code: resp.take_revocation_code().into(),
 			uri: resp.take_uri().into(),
-			shared_secret: TwoFactorSecret::from_bytes(resp.take_shared_secret()),
+			shared_secret: TwoFactorSecret::try_from_bytes(resp.take_shared_secret())
+				.context("reading shared secret from transfer response")?,
 			token_gid: resp.take_token_gid(),
 			identity_secret: base64::engine::general_purpose::STANDARD
 				.encode(resp.take_identity_secret())
@@ -287,6 +293,15 @@ impl From<i32> for AccountLinkConfirmType {
 
 fn generate_device_id() -> String {
 	format!("android:{}", uuid::Uuid::new_v4())
+}
+
+fn take_replacement_token(
+	response: &mut CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Response,
+) -> Result<CRemoveAuthenticatorViaChallengeContinue_Replacement_Token, TransferError> {
+	response
+		.replacement_token
+		.take()
+		.ok_or(TransferError::MissingReplacementToken)
 }
 
 #[derive(Error, Debug)]
@@ -379,6 +394,8 @@ pub enum TransferError {
 	GenericFailure,
 	#[error("Provided SMS code was incorrect.")]
 	BadSmsCode,
+	#[error("Steam did not return replacement authenticator data.")]
+	MissingReplacementToken,
 	#[error("Failed to send request to Steam: {0:?}")]
 	Transport(#[from] crate::transport::TransportError),
 	#[error("Steam returned an unexpected error code: {0:?}")]
@@ -394,5 +411,19 @@ impl From<EResult> for TransferError {
 			EResult::SMSCodeFailed => TransferError::BadSmsCode,
 			r => TransferError::UnknownEResult(r),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn truncated_transfer_response_returns_an_error() {
+		let mut response = CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Response::new();
+		assert!(matches!(
+			take_replacement_token(&mut response),
+			Err(TransferError::MissingReplacementToken)
+		));
 	}
 }

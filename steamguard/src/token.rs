@@ -1,3 +1,4 @@
+use anyhow::Context;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use secrecy::{ExposeSecret, Secret, SecretString};
@@ -28,8 +29,15 @@ impl TwoFactorSecret {
 	}
 
 	pub fn from_bytes(bytes: Vec<u8>) -> Self {
-		let bytes: [u8; 20] = bytes[..].try_into().unwrap();
-		Self(bytes.into())
+		Self::try_from_bytes(bytes).expect("two-factor secrets must contain exactly 20 bytes")
+	}
+
+	/// Creates a two-factor secret after validating its length.
+	pub fn try_from_bytes(bytes: Vec<u8>) -> anyhow::Result<Self> {
+		let bytes: [u8; 20] = bytes
+			.try_into()
+			.map_err(|_| anyhow::anyhow!("two-factor secret must contain exactly 20 bytes"))?;
+		Ok(Self(bytes.into()))
 	}
 
 	pub fn parse_shared_secret(secret: String) -> anyhow::Result<Self> {
@@ -37,7 +45,7 @@ impl TwoFactorSecret {
 		let result: [u8; 20] = base64::engine::general_purpose::STANDARD
 			.decode(secret)?
 			.try_into()
-			.unwrap();
+			.map_err(|_| anyhow::anyhow!("shared secret must decode to exactly 20 bytes"))?;
 		Ok(Self(result.into()))
 	}
 
@@ -93,7 +101,8 @@ impl<'de> Deserialize<'de> for TwoFactorSecret {
 	where
 		D: Deserializer<'de>,
 	{
-		Ok(TwoFactorSecret::parse_shared_secret(String::deserialize(deserializer)?).unwrap())
+		TwoFactorSecret::parse_shared_secret(String::deserialize(deserializer)?)
+			.map_err(serde::de::Error::custom)
 	}
 }
 
@@ -180,13 +189,21 @@ impl From<String> for Jwt {
 }
 
 fn decode_jwt(jwt: impl AsRef<str>) -> anyhow::Result<SteamJwtData> {
-	let parts = jwt.as_ref().split('.').collect::<Vec<&str>>();
-	ensure!(parts.len() == 3, "Invalid JWT");
-
-	let data = parts[1];
+	let mut parts = jwt.as_ref().split('.');
+	let header = parts.next().ok_or_else(|| anyhow::anyhow!("Invalid JWT"))?;
+	let data = parts.next().ok_or_else(|| anyhow::anyhow!("Invalid JWT"))?;
+	let signature = parts.next().ok_or_else(|| anyhow::anyhow!("Invalid JWT"))?;
+	ensure!(parts.next().is_none(), "Invalid JWT");
+	ensure!(
+		!header.is_empty() && !data.is_empty() && !signature.is_empty(),
+		"Invalid JWT"
+	);
 	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data)?;
 	let json = String::from_utf8(bytes)?;
 	let jwt_data: SteamJwtData = serde_json::from_str(&json)?;
+	jwt_data
+		.try_steam_id()
+		.context("JWT subject is not a valid Steam ID")?;
 	Ok(jwt_data)
 }
 
@@ -217,7 +234,14 @@ impl fmt::Debug for SteamJwtData {
 
 impl SteamJwtData {
 	pub fn steam_id(&self) -> u64 {
-		self.sub.parse::<u64>().unwrap()
+		self.try_steam_id().unwrap_or_default()
+	}
+
+	/// Parses the subject claim as a Steam ID.
+	pub fn try_steam_id(&self) -> anyhow::Result<u64> {
+		self.sub
+			.parse::<u64>()
+			.map_err(|_| anyhow::anyhow!("JWT subject is not a valid Steam ID"))
 	}
 }
 
@@ -322,6 +346,30 @@ mod tests {
 	}
 
 	#[test]
+	fn malformed_secrets_and_tokens_return_errors() {
+		assert!(TwoFactorSecret::try_from_bytes(vec![0; 19]).is_err());
+		assert!(TwoFactorSecret::parse_shared_secret("c2hvcnQ=".to_owned()).is_err());
+		assert!(serde_json::from_str::<FooBar>("{\"secret\":\"c2hvcnQ=\"}").is_err());
+		assert!(decode_jwt("header.payload").is_err());
+		assert!(decode_jwt("header.not-base64.signature").is_err());
+		assert!(decode_jwt(".payload.signature").is_err());
+
+		let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+			.encode(br#"{"exp":1,"iat":1,"iss":"steam","aud":[],"sub":"invalid","jti":"id"}"#);
+		assert!(decode_jwt(format!("header.{payload}.signature")).is_err());
+
+		let jwt_data = SteamJwtData {
+			exp: 1,
+			iat: 2,
+			iss: "steam".to_owned(),
+			aud: vec!["web".to_owned()],
+			sub: "not-a-steam-id".to_owned(),
+			jti: "id".to_owned(),
+		};
+		assert!(jwt_data.try_steam_id().is_err());
+	}
+
+	#[test]
 	fn test_decode_jwt() {
 		let sample: Jwt = "eyAidHlwIjogIkpXVCIsICJhbGciOiAiRWREU0EiIH0.eyAiaXNzIjogInN0ZWFtIiwgInN1YiI6ICI3NjU2MTE5OTE1NTcwNjg5MiIsICJhdWQiOiBbICJ3ZWIiLCAicmVuZXciLCAiZGVyaXZlIiBdLCAiZXhwIjogMTcwNTAxMTk1NSwgIm5iZiI6IDE2Nzg0NjQ4MzcsICJpYXQiOiAxNjg3MTA0ODM3LCAianRpIjogIjE4QzVfMjJCM0Y0MzFfQ0RGNkEiLCAib2F0IjogMTY4NzEwNDgzNywgInBlciI6IDEsICJpcF9zdWJqZWN0IjogIjY5LjEyMC4xMzYuMTI0IiwgImlwX2NvbmZpcm1lciI6ICI2OS4xMjAuMTM2LjEyNCIgfQ.7p5TPj9pGQbxIzWDDNCSP9OkKYSeDnWBE8E-M8hUrxOEPCW0XwrbDUrh199RzjPDw".to_owned().into();
 		let data = sample.decode().expect("Failed to decode JWT");
@@ -331,6 +379,7 @@ mod tests {
 		assert_eq!(data.iss, "steam");
 		assert_eq!(data.aud, vec!["web", "renew", "derive"]);
 		assert_eq!(data.sub, "76561199155706892");
+		assert_eq!(data.try_steam_id().unwrap(), 76561199155706892);
 		assert_eq!(data.jti, "18C5_22B3F431_CDF6A");
 	}
 

@@ -158,7 +158,7 @@ where
 		req.set_account_name(account_name.to_owned());
 		let rsa_resp = rsa.into_response_data();
 		req.set_encryption_timestamp(rsa_resp.timestamp());
-		let encrypted_password = encrypt_password(rsa_resp, password);
+		let encrypted_password = encrypt_password(rsa_resp, password)?;
 		req.set_encrypted_password(encrypted_password);
 		req.set_persistence(ESessionPersistence::k_ESessionPersistence_Persistent);
 		req.device_details = self.device_details.clone().into_message_field();
@@ -172,16 +172,15 @@ where
 		}
 
 		debug!("auth session started");
-		self.started_auth = Some(resp.into_response_data().into());
-
-		Ok(self
-			.started_auth
-			.as_ref()
-			.unwrap()
+		let started_auth: StartAuth = resp.into_response_data().into();
+		let allowed_confirmations = started_auth
 			.allowed_confirmations()
 			.iter()
 			.map(|c| c.clone().into())
-			.collect())
+			.collect();
+		self.started_auth = Some(started_auth);
+
+		Ok(allowed_confirmations)
 	}
 
 	pub fn begin_auth_via_qr(&mut self) -> Result<BeginQrLoginResponse, LoginError> {
@@ -246,7 +245,7 @@ where
 				return Ok(resp.into_response_data());
 			}
 
-			std::thread::sleep(Duration::from_secs_f32(started_auth.interval()));
+			std::thread::sleep(poll_interval(started_auth.interval())?);
 		}
 	}
 
@@ -270,7 +269,8 @@ where
 						.refresh_token()
 						.decode()
 						.context("decoding refresh token for steam id")?
-						.steam_id();
+						.try_steam_id()
+						.context("reading Steam ID from refresh token")?;
 					let access_token = refresher.refresh(steamid, &tokens)?;
 					tokens.set_access_token(access_token);
 					return Ok(tokens);
@@ -324,19 +324,26 @@ where
 fn encrypt_password(
 	rsa_resp: CAuthentication_GetPasswordRSAPublicKey_Response,
 	password: impl AsRef<[u8]>,
-) -> String {
-	let rsa_exponent = rsa::BigUint::parse_bytes(rsa_resp.publickey_exp().as_bytes(), 16).unwrap();
-	let rsa_modulus = rsa::BigUint::parse_bytes(rsa_resp.publickey_mod().as_bytes(), 16).unwrap();
-	let public_key = RsaPublicKey::new(rsa_modulus, rsa_exponent).unwrap();
+) -> anyhow::Result<String> {
+	let rsa_exponent = rsa::BigUint::parse_bytes(rsa_resp.publickey_exp().as_bytes(), 16)
+		.ok_or_else(|| anyhow::anyhow!("invalid RSA exponent in login response"))?;
+	let rsa_modulus = rsa::BigUint::parse_bytes(rsa_resp.publickey_mod().as_bytes(), 16)
+		.ok_or_else(|| anyhow::anyhow!("invalid RSA modulus in login response"))?;
+	let public_key = RsaPublicKey::new(rsa_modulus, rsa_exponent)
+		.context("invalid RSA public key in login response")?;
 	#[cfg(test)]
 	let mut rng = tests::MockStepRng::new(2, 1);
 	#[cfg(not(test))]
 	let mut rng = rsa::rand_core::OsRng;
-	base64::engine::general_purpose::STANDARD.encode(
-		public_key
-			.encrypt(&mut rng, Pkcs1v15Encrypt, password.as_ref())
-			.unwrap(),
-	)
+	let encrypted = public_key
+		.encrypt(&mut rng, Pkcs1v15Encrypt, password.as_ref())
+		.context("password could not be encrypted with the login key")?;
+	Ok(base64::engine::general_purpose::STANDARD.encode(encrypted))
+}
+
+fn poll_interval(seconds: f32) -> anyhow::Result<Duration> {
+	Duration::try_from_secs_f32(seconds)
+		.map_err(|_| anyhow::anyhow!("invalid polling interval in login response"))
 }
 
 enum StartAuth {
@@ -530,7 +537,7 @@ mod tests {
 		rsa_resp.set_publickey_exp(String::from("010001"));
 		rsa_resp.set_publickey_mod(String::from("98f9088c1250b17fe19d2b2422d54a1eef0036875301731f11bd17900e215318eb6de1546727c0b7b61b86cefccdcb2f8108c813154d9a7d55631965eece810d4ab9d8a59c486bda778651b876176070598a93c2325c275cb9c17bdbcacf8edc9c18c0c5d59bc35703505ef8a09ed4c62b9f92a3fac5740ce25e490ab0e26d872140e4103d912d1e3958f844264211277ee08d2b4dd3ac58b030b25342bd5c949ae7794e46a8eab26d5a8deca683bfd381da6c305b19868b8c7cd321ce72c693310a6ebf2ecd43642518f825894602f6c239cf193cb4346ce64beac31e20ef88f934f2f776597734bb9eae1ebdf4a453973b6df9d5e90777bffe5db83dd1757b"));
 		rsa_resp.set_timestamp(1);
-		let result = encrypt_password(rsa_resp, "kelwleofpsm3n4ofc");
+		let result = encrypt_password(rsa_resp, "kelwleofpsm3n4ofc").unwrap();
 		assert_eq!(result.len(), 344);
 		assert_eq!(result, "RUo/3IfbkVcJi1q1S5QlpKn1mEn3gNJoc/Z4VwxRV9DImV6veq/YISEuSrHB3885U5MYFLn1g94Y+cWRL6HGXoV+gOaVZe43m7O92RwiVz6OZQXMfAv3UC/jcqn/xkitnj+tNtmx55gCxmGbO2KbqQ0TQqAyqCOOw565B+Cwr2OOorpMZAViv9sKA/G3Q6yzscU6rhua179c8QjC1Hk3idUoSzpWfT4sHNBW/EREXZ3Dkjwu17xzpfwIUpnBVIlR8Vj3coHgUCpTsKVRA3T814v9BYPlvLYwmw5DW3ddx+2SyTY0P5uuog36TN2PqYS7ioF5eDe16gyfRR4Nzn/7wA==");
 	}
@@ -541,7 +548,7 @@ mod tests {
 		rsa_resp.set_publickey_exp(String::from("010001"));
 		rsa_resp.set_publickey_mod(String::from("ca6a8dc290279b25c38a282b9a7b01306c5978bd7a2f60dcfd52134ac58faf121568ebd85ca6a2128413b76ec70fb3150b3181bbe2a1a8349b68da9c303960bdf4e34296b27bd4ea29b4d1a695168ddfc974bb6ba427206fdcdb088bf27261a52f343a51e19759fe4072b7a2047a6bc31361950d9e87d7977b31b71696572babe45ea6a7d132547984462fd5787607e0d9ff1c637e04d593e7538c880c3cdd252b75bcb703a7b8bb01cd8898b04980f40b76235d50fc1544c39ccbe763892322fc6d0a5acaf8be09efbc20fcfebcd3b02a1eb95d9d0c338e96674c17edbb0257cd43d04974423f1f995a28b9e159322d9db2708826804c0eccafffc94dd2a3d5"));
 		rsa_resp.set_timestamp(104444850000);
-		let result = encrypt_password(rsa_resp, "foo");
+		let result = encrypt_password(rsa_resp, "foo").unwrap();
 		assert_eq!(result, "jmlMXmhbweWn+wJnnf96W3Lsh0dRmzrBfMxREUuEW11rRYcfXWupBIT3eK1fmQHMZmyJeMhZiRpgIaZ7DafojQT6djJr+RKeREJs0ys9hKwxD5FGlqsTLXXEeuyopyd2smHBbmmF47voe59KEoiZZapP+eYnpJy3O2k7e1P9BH9LsKIN/nWF1ogM2jjJ328AejUpM64tPl/kInFJ1CHrLiAAKDPk42fLAAKs97xIi0JkosG6yp+8HhFqQxxZ8/bNI1IVkQC1Hdc2AN0QlNKxbDXquAn6ARgw/4b5DwUpnOb9de+Q6iX3v1/M07Se7JV8/4tuz8Thy2Chbxsf9E1TuQ==");
 	}
 
@@ -560,5 +567,21 @@ mod tests {
 		assert!(!output.contains("challenge-url-canary"));
 		assert!(!output.contains("confirmation-message-canary"));
 		assert!(output.contains("[REDACTED]"));
+	}
+
+	#[test]
+	fn malformed_login_parameters_return_errors() {
+		let mut invalid_exponent = CAuthentication_GetPasswordRSAPublicKey_Response::new();
+		invalid_exponent.set_publickey_exp("not-hex".to_owned());
+		invalid_exponent.set_publickey_mod("11".to_owned());
+		assert!(encrypt_password(invalid_exponent, "password").is_err());
+
+		let mut invalid_modulus = CAuthentication_GetPasswordRSAPublicKey_Response::new();
+		invalid_modulus.set_publickey_exp("010001".to_owned());
+		invalid_modulus.set_publickey_mod("not-hex".to_owned());
+		assert!(encrypt_password(invalid_modulus, "password").is_err());
+
+		assert!(poll_interval(f32::NAN).is_err());
+		assert!(poll_interval(-1.0).is_err());
 	}
 }
