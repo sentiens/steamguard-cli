@@ -49,7 +49,9 @@ impl TwoFactorSecret {
 		Ok(Self(result.into()))
 	}
 
-	/// Generate a 5 character 2FA code to that can be used to log in to Steam.
+	/// Generates a 5 character 2FA code for the supplied Unix timestamp.
+	///
+	/// Callers that maintain a Steam time offset should apply it before passing the timestamp.
 	pub fn generate_code(&self, time: u64) -> String {
 		let steam_guard_code_translations: [u8; 26] = [
 			50, 51, 52, 53, 54, 55, 56, 57, 66, 67, 68, 70, 71, 72, 74, 75, 77, 78, 80, 81, 82, 84,
@@ -306,6 +308,7 @@ mod tests {
 
 		let code = secret.generate_code(1616374841u64);
 		assert_eq!(code, "2F9J5");
+		assert_eq!(secret.generate_code(1616374859u64), "2F9J5");
 		Ok(())
 	}
 

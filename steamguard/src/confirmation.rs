@@ -25,6 +25,7 @@ const CONFIRMATION_USER_AGENT: &str =
 pub struct Confirmer<'a, T> {
 	account: &'a SteamGuardAccount,
 	transport: T,
+	server_time: Option<u64>,
 }
 
 impl<'a, T> Confirmer<'a, T>
@@ -32,7 +33,27 @@ where
 	T: Transport + Clone,
 {
 	pub fn new(transport: T, account: &'a SteamGuardAccount) -> Self {
-		Self { account, transport }
+		Self {
+			account,
+			transport,
+			server_time: None,
+		}
+	}
+
+	/// Uses a caller-supplied Unix timestamp for confirmation request signatures.
+	///
+	/// This avoids a Steam time query when the caller has already applied its server time offset.
+	#[must_use]
+	pub fn with_server_time(mut self, server_time: u64) -> Self {
+		self.server_time = Some(server_time);
+		self
+	}
+
+	fn server_time(&self) -> anyhow::Result<u64> {
+		match self.server_time {
+			Some(server_time) => Ok(server_time),
+			None => Ok(steamapi::get_server_time(self.transport.clone())?.server_time()),
+		}
 	}
 
 	fn get_confirmation_query_params<'q>(
@@ -95,7 +116,7 @@ where
 	pub fn get_confirmations(&self) -> Result<Vec<Confirmation>, ConfirmerError> {
 		let cookie = self.build_cookie_header()?;
 
-		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
+		let time = self.server_time()?;
 		let query_params = self.get_confirmation_query_params("conf", time)?;
 		let resp = self.transport.send_web(WebRequest::new(
 			WebEndpoint::ConfirmationList,
@@ -140,7 +161,7 @@ where
 
 		let cookie = self.build_cookie_header()?;
 
-		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
+		let time = self.server_time()?;
 		let mut query_params = self.get_confirmation_query_params("conf", time)?;
 		query_params.push(("op", operation.into()));
 		query_params.push(("cid", Cow::Borrowed(conf.id)));
@@ -220,7 +241,7 @@ where
 
 		let cookie = self.build_cookie_header()?;
 
-		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
+		let time = self.server_time()?;
 		let mut query_params = self.get_confirmation_query_params("conf", time)?;
 		query_params.push(("op", operation.into()));
 		for conf in confs.iter() {
@@ -345,7 +366,7 @@ where
 
 		let cookie = self.build_cookie_header()?;
 
-		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
+		let time = self.server_time()?;
 		let query_params = self.get_confirmation_query_params("details", time)?;
 
 		let resp = self.transport.send_web(WebRequest::new(
@@ -596,6 +617,25 @@ mod tests {
 
 	use super::*;
 
+	#[derive(Clone)]
+	struct RejectingTransport;
+
+	impl Transport for RejectingTransport {
+		fn send_request<
+			Req: crate::steamapi::BuildableRequest + protobuf::MessageFull,
+			Res: protobuf::MessageFull,
+		>(
+			&self,
+			_req: crate::steamapi::ApiRequest<Req>,
+		) -> Result<crate::steamapi::ApiResponse<Res>, crate::transport::TransportError> {
+			Err(crate::transport::TransportError::Unknown(anyhow::anyhow!(
+				"unexpected time request"
+			)))
+		}
+
+		fn close(&mut self) {}
+	}
+
 	#[test]
 	fn test_parse_confirmations() -> anyhow::Result<()> {
 		struct Test {
@@ -726,6 +766,35 @@ mod tests {
 			confirmer.build_cookie_header(),
 			Err(ConfirmerError::InvalidCookieHeader)
 		));
+	}
+
+	#[test]
+	fn confirmation_query_uses_the_supplied_time() {
+		let account = SteamGuardAccount {
+			steam_id: 7_656_119_900_000_001,
+			device_id: "android:test-device".to_owned(),
+			identity_secret: "GQP46b73Ws7gr8GmZFR0sDuau5c=".to_owned().into(),
+			..SteamGuardAccount::default()
+		};
+		assert!(Confirmer::new(RejectingTransport, &account)
+			.server_time()
+			.is_err());
+		let confirmer =
+			Confirmer::new(RejectingTransport, &account).with_server_time(1_617_591_917);
+
+		let time = confirmer.server_time().unwrap();
+		let query = confirmer
+			.get_confirmation_query_params("conf", time)
+			.unwrap();
+		let value = |name| {
+			query
+				.iter()
+				.find(|(key, _)| *key == name)
+				.map(|(_, value)| value.as_ref())
+		};
+
+		assert_eq!(value("t"), Some("1617591917"));
+		assert_eq!(value("k"), Some("NaL8EIMhfy/7vBounJ0CvpKbrPk="));
 	}
 
 	#[test]
