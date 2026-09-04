@@ -1,6 +1,8 @@
+mod proxy;
 pub mod webapi;
 
 use protobuf::MessageFull;
+pub use proxy::{ProxyConfig, ProxyConfigError, ProxyTransportError};
 pub use webapi::WebApiTransport;
 
 use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest};

@@ -1,18 +1,42 @@
+use std::fmt;
+
 use log::{debug, trace};
 use protobuf::MessageFull;
 use reqwest::blocking::multipart::Form;
 
-use super::{Transport, TransportError};
+use super::{ProxyConfig, ProxyTransportError, Transport, TransportError};
 use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WebApiTransport {
 	client: reqwest::blocking::Client,
+}
+
+impl fmt::Debug for WebApiTransport {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("WebApiTransport")
+			.field("client", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl WebApiTransport {
 	pub fn new(client: reqwest::blocking::Client) -> Self {
 		Self { client }
+	}
+
+	/// Creates a transport whose requests are routed through `proxy`.
+	///
+	/// Create one transport per account when accounts require different proxy routes. Use
+	/// [`WebApiTransport::new`] to retain the existing client construction behavior when no proxy is
+	/// required.
+	pub fn new_with_proxy(proxy: &ProxyConfig) -> Result<Self, ProxyTransportError> {
+		let proxy = proxy.to_reqwest_proxy()?;
+		let client = reqwest::blocking::Client::builder()
+			.proxy(proxy)
+			.build()
+			.map_err(|_| ProxyTransportError::ClientBuild)?;
+		Ok(Self::new(client))
 	}
 }
 
