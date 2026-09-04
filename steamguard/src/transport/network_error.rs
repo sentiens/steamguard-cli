@@ -17,9 +17,11 @@ pub enum NetworkErrorKind {
 	Redirect,
 	Body,
 	Request,
+	InvalidRequest,
+	UnsupportedTransport,
 }
 
-/// An HTTP transport failure with a stable category and its original source.
+/// An HTTP transport failure with a stable category and its original source, when available.
 pub struct NetworkError {
 	kind: NetworkErrorKind,
 	status: Option<StatusCode>,
@@ -44,6 +46,24 @@ impl NetworkError {
 		match response.error_for_status_ref() {
 			Ok(_) => Ok(response),
 			Err(error) => Err(Self::new(error, retry_after)),
+		}
+	}
+
+	pub(crate) fn invalid_request() -> Self {
+		Self {
+			kind: NetworkErrorKind::InvalidRequest,
+			status: None,
+			retry_after: None,
+			source: None,
+		}
+	}
+
+	pub(crate) fn unsupported_transport() -> Self {
+		Self {
+			kind: NetworkErrorKind::UnsupportedTransport,
+			status: None,
+			retry_after: None,
+			source: None,
 		}
 	}
 
@@ -92,6 +112,10 @@ impl fmt::Display for NetworkError {
 			(NetworkErrorKind::Redirect, _) => f.write_str("redirect was rejected"),
 			(NetworkErrorKind::Body, _) => f.write_str("response body could not be read"),
 			(NetworkErrorKind::Request, _) => f.write_str("network request failed"),
+			(NetworkErrorKind::InvalidRequest, _) => f.write_str("network request was invalid"),
+			(NetworkErrorKind::UnsupportedTransport, _) => {
+				f.write_str("transport does not support community web requests")
+			}
 		}
 	}
 }

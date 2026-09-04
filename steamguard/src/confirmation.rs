@@ -3,18 +3,14 @@ use std::{borrow::Cow, fmt};
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use log::*;
-use reqwest::{
-	cookie::CookieStore,
-	header::{CONTENT_TYPE, COOKIE, USER_AGENT},
-	Url,
-};
+use reqwest::{cookie::CookieStore, Url};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
 use sha1::Sha1;
 
 use crate::{
 	steamapi::{self},
-	transport::{NetworkError, Transport},
+	transport::{NetworkError, Transport, WebEndpoint, WebRequest},
 	SteamGuardAccount,
 };
 
@@ -28,7 +24,7 @@ lazy_static! {
 
 /// Provides an interface that wraps the Steam mobile confirmation API.
 ///
-/// Only compatible with WebApiTransport.
+/// The transport must support Steam Community web requests.
 pub struct Confirmer<'a, T> {
 	account: &'a SteamGuardAccount,
 	transport: T,
@@ -88,25 +84,21 @@ where
 
 	pub fn get_confirmations(&self) -> Result<Vec<Confirmation>, ConfirmerError> {
 		let cookies = self.build_cookie_jar();
-		let client = self.transport.innner_http_client()?;
+		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
-		let resp = client
-			.get(
-				"https://steamcommunity.com/mobileconf/getlist"
-					.parse::<Url>()
-					.unwrap(),
-			)
-			.header(USER_AGENT, CONFIRMATION_USER_AGENT)
-			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
-			.header("Accept-Language", ACCEPT_LANGUAGE)
-			.query(&self.get_confirmation_query_params("conf", time))
-			.send()
-			.map_err(NetworkError::from)?;
+		let query_params = self.get_confirmation_query_params("conf", time);
+		let resp = self.transport.send_web(WebRequest::new(
+			WebEndpoint::ConfirmationList,
+			&query_params,
+			CONFIRMATION_USER_AGENT,
+			cookie,
+			ACCEPT_LANGUAGE,
+		))?;
 
 		trace!("Confirmation list response status: {}", resp.status());
-		let resp = NetworkError::ensure_success(resp)?;
-		let text = resp.text().map_err(NetworkError::from)?;
+		let text = resp.into_body();
 		debug!("Confirmation list response length: {} bytes", text.len());
 
 		let mut deser = serde_json::Deserializer::from_str(text.as_str());
@@ -139,7 +131,8 @@ where
 		let operation = action.to_operation();
 
 		let cookies = self.build_cookie_jar();
-		let client = self.transport.innner_http_client()?;
+		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
 		let mut query_params = self.get_confirmation_query_params("conf", time);
@@ -147,27 +140,23 @@ where
 		query_params.push(("cid", Cow::Borrowed(conf.id)));
 		query_params.push(("ck", Cow::Borrowed(conf.nonce)));
 
-		let resp = client
-			.get(
-				"https://steamcommunity.com/mobileconf/ajaxop"
-					.parse::<Url>()
-					.unwrap(),
+		let resp = self.transport.send_web(
+			WebRequest::new(
+				WebEndpoint::ConfirmationAction,
+				&query_params,
+				CONFIRMATION_USER_AGENT,
+				cookie,
+				ACCEPT_LANGUAGE,
 			)
-			.header(USER_AGENT, CONFIRMATION_USER_AGENT)
-			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
-			.header("Accept-Language", ACCEPT_LANGUAGE)
-			.header("Origin", "https://steamcommunity.com")
-			.query(&query_params)
-			.send()
-			.map_err(NetworkError::from)?;
+			.with_origin("https://steamcommunity.com"),
+		)?;
 
 		debug!(
 			"send_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
-		let resp = NetworkError::ensure_success(resp)?;
-		let raw = resp.text().map_err(NetworkError::from)?;
+		let raw = resp.into_body();
 		trace!(
 			"send_confirmation_ajax() response body length: {} bytes",
 			raw.len()
@@ -224,7 +213,8 @@ where
 		let operation = action.to_operation();
 
 		let cookies = self.build_cookie_jar();
-		let client = self.transport.innner_http_client()?;
+		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
 		let mut query_params = self.get_confirmation_query_params("conf", time);
@@ -241,31 +231,25 @@ where
 			query_params.len()
 		);
 
-		let resp = client
-			.post(
-				"https://steamcommunity.com/mobileconf/multiajaxop"
-					.parse::<Url>()
-					.unwrap(),
+		let no_query = [];
+		let resp = self.transport.send_web(
+			WebRequest::new(
+				WebEndpoint::ConfirmationBulkAction,
+				&no_query,
+				CONFIRMATION_USER_AGENT,
+				cookie,
+				ACCEPT_LANGUAGE,
 			)
-			.header(USER_AGENT, CONFIRMATION_USER_AGENT)
-			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
-			.header(
-				CONTENT_TYPE,
-				"application/x-www-form-urlencoded; charset=UTF-8",
-			)
-			.header("Origin", "https://steamcommunity.com")
-			.header("Accept-Language", ACCEPT_LANGUAGE)
-			.body(query_params)
-			.send()
-			.map_err(NetworkError::from)?;
+			.with_origin("https://steamcommunity.com")
+			.with_form_body(&query_params),
+		)?;
 
 		debug!(
 			"send_multi_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
-		let resp = NetworkError::ensure_success(resp)?;
-		let raw = resp.text().map_err(NetworkError::from)?;
+		let raw = resp.into_body();
 		trace!(
 			"send_multi_confirmation_ajax() response body length: {} bytes",
 			raw.len()
@@ -356,29 +340,21 @@ where
 		}
 
 		let cookies = self.build_cookie_jar();
-		let client = self.transport.innner_http_client()?;
+		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
 		let query_params = self.get_confirmation_query_params("details", time);
 
-		let resp = client
-			.get(
-				format!(
-					"https://steamcommunity.com/mobileconf/details/{}",
-					conf.into().id
-				)
-				.parse::<Url>()
-				.unwrap(),
-			)
-			.header(USER_AGENT, CONFIRMATION_USER_AGENT)
-			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
-			.header("Accept-Language", ACCEPT_LANGUAGE)
-			.query(&query_params)
-			.send()
-			.map_err(NetworkError::from)?;
+		let resp = self.transport.send_web(WebRequest::new(
+			WebEndpoint::ConfirmationDetails(conf.into().id),
+			&query_params,
+			CONFIRMATION_USER_AGENT,
+			cookie,
+			ACCEPT_LANGUAGE,
+		))?;
 
-		let resp = NetworkError::ensure_success(resp)?;
-		let text = resp.text().map_err(NetworkError::from)?;
+		let text = resp.into_body();
 		let mut deser = serde_json::Deserializer::from_str(text.as_str());
 		let body: ConfirmationDetailsResponse = serde_path_to_error::deserialize(&mut deser)?;
 

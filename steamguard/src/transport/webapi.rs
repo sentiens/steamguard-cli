@@ -1,8 +1,12 @@
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use log::{debug, trace};
 use protobuf::MessageFull;
-use reqwest::blocking::multipart::Form;
+use reqwest::{
+	blocking::{multipart::Form, RequestBuilder},
+	header::{ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, ORIGIN, USER_AGENT},
+	Url,
+};
 
 use super::{NetworkError, ProxyConfig, ProxyTransportError, Transport, TransportError};
 use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult};
@@ -38,6 +42,48 @@ impl WebApiTransport {
 			.map_err(|_| ProxyTransportError::ClientBuild)?;
 		Ok(Self::new(client))
 	}
+}
+
+fn build_web_request(
+	client: &reqwest::blocking::Client,
+	request: WebRequest<'_>,
+) -> Result<RequestBuilder, NetworkError> {
+	let method = if request.form_body.is_some() {
+		reqwest::Method::POST
+	} else {
+		reqwest::Method::GET
+	};
+	let mut builder = client
+		.request(method, request.endpoint.url()?)
+		.header(USER_AGENT, request.user_agent)
+		.header(COOKIE, request.cookie)
+		.header(ACCEPT_LANGUAGE, request.accept_language)
+		.query(request.query);
+	if let Some(origin) = request.origin {
+		builder = builder.header(ORIGIN, origin);
+	}
+	if let Some(body) = request.form_body {
+		builder = builder
+			.header(
+				CONTENT_TYPE,
+				"application/x-www-form-urlencoded; charset=UTF-8",
+			)
+			.body(body.to_owned());
+	}
+	Ok(builder)
+}
+
+pub(crate) fn send_web(
+	client: &reqwest::blocking::Client,
+	request: WebRequest<'_>,
+) -> Result<WebResponse, NetworkError> {
+	let endpoint = request.endpoint.name();
+	let response = build_web_request(client, request)?.send()?;
+	let status = response.status().as_u16();
+	debug!("Web request completed: endpoint={endpoint}, status={status}");
+	let response = NetworkError::ensure_success(response)?;
+	let body = response.text()?;
+	Ok(WebResponse { status, body })
 }
 
 impl Transport for WebApiTransport {
@@ -134,10 +180,154 @@ impl Transport for WebApiTransport {
 		Ok(api_resp)
 	}
 
+	fn send_web(&self, request: WebRequest<'_>) -> Result<WebResponse, NetworkError> {
+		send_web(&self.client, request)
+	}
+
 	fn close(&mut self) {}
 
 	fn innner_http_client(&self) -> anyhow::Result<reqwest::blocking::Client> {
 		Ok(self.client.clone())
+	}
+}
+
+/// A Steam Community endpoint supported by [`WebApiTransport`].
+#[non_exhaustive]
+#[derive(Clone, Copy)]
+pub enum WebEndpoint<'a> {
+	ConfirmationList,
+	ConfirmationAction,
+	ConfirmationBulkAction,
+	ConfirmationDetails(&'a str),
+	#[cfg(test)]
+	Test(&'a str),
+}
+
+impl WebEndpoint<'_> {
+	fn name(self) -> &'static str {
+		match self {
+			Self::ConfirmationList => "confirmation-list",
+			Self::ConfirmationAction => "confirmation-action",
+			Self::ConfirmationBulkAction => "confirmation-bulk-action",
+			Self::ConfirmationDetails(_) => "confirmation-details",
+			#[cfg(test)]
+			Self::Test(_) => "test",
+		}
+	}
+
+	fn url(self) -> Result<Url, NetworkError> {
+		match self {
+			Self::ConfirmationList => Url::parse("https://steamcommunity.com/mobileconf/getlist")
+				.map_err(|_| NetworkError::invalid_request()),
+			Self::ConfirmationAction => Url::parse("https://steamcommunity.com/mobileconf/ajaxop")
+				.map_err(|_| NetworkError::invalid_request()),
+			Self::ConfirmationBulkAction => {
+				Url::parse("https://steamcommunity.com/mobileconf/multiajaxop")
+					.map_err(|_| NetworkError::invalid_request())
+			}
+			Self::ConfirmationDetails(id) => {
+				let mut url = Url::parse("https://steamcommunity.com/mobileconf/details/")
+					.map_err(|_| NetworkError::invalid_request())?;
+				url.path_segments_mut()
+					.map_err(|_| NetworkError::invalid_request())?
+					.push(id);
+				Ok(url)
+			}
+			#[cfg(test)]
+			Self::Test(url) => Url::parse(url).map_err(|_| NetworkError::invalid_request()),
+		}
+	}
+}
+
+impl fmt::Debug for WebEndpoint<'_> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(self.name())
+	}
+}
+
+/// A request to a Steam Community endpoint.
+pub struct WebRequest<'a> {
+	endpoint: WebEndpoint<'a>,
+	query: &'a [(&'static str, Cow<'a, str>)],
+	user_agent: &'a str,
+	cookie: &'a str,
+	accept_language: &'a str,
+	origin: Option<&'a str>,
+	form_body: Option<&'a str>,
+}
+
+impl<'a> WebRequest<'a> {
+	pub fn new(
+		endpoint: WebEndpoint<'a>,
+		query: &'a [(&'static str, Cow<'a, str>)],
+		user_agent: &'a str,
+		cookie: &'a str,
+		accept_language: &'a str,
+	) -> Self {
+		Self {
+			endpoint,
+			query,
+			user_agent,
+			cookie,
+			accept_language,
+			origin: None,
+			form_body: None,
+		}
+	}
+
+	pub fn with_origin(mut self, origin: &'a str) -> Self {
+		self.origin = Some(origin);
+		self
+	}
+
+	/// Sends the request as a POST with a URL-encoded form body.
+	pub fn with_form_body(mut self, body: &'a str) -> Self {
+		self.form_body = Some(body);
+		self
+	}
+}
+
+impl fmt::Debug for WebRequest<'_> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("WebRequest")
+			.field(
+				"method",
+				&if self.form_body.is_some() {
+					"POST"
+				} else {
+					"GET"
+				},
+			)
+			.field("endpoint", &self.endpoint)
+			.field("query", &"[REDACTED]")
+			.field("headers", &"[REDACTED]")
+			.field("body", &self.form_body.as_ref().map(|_| "[REDACTED]"))
+			.finish()
+	}
+}
+
+/// The status and body returned by a Steam Community endpoint.
+pub struct WebResponse {
+	status: u16,
+	body: String,
+}
+
+impl WebResponse {
+	pub fn status(&self) -> u16 {
+		self.status
+	}
+
+	pub fn into_body(self) -> String {
+		self.body
+	}
+}
+
+impl fmt::Debug for WebResponse {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("WebResponse")
+			.field("status", &self.status)
+			.field("body", &"[REDACTED]")
+			.finish()
 	}
 }
 
@@ -169,6 +359,148 @@ mod tests {
 
 	use super::*;
 	use base64::{engine::general_purpose::STANDARD, Engine};
+
+	#[derive(Clone)]
+	struct AccessorOnlyTransport(reqwest::blocking::Client);
+
+	impl Transport for AccessorOnlyTransport {
+		fn send_request<Req: BuildableRequest + MessageFull, Res: MessageFull>(
+			&self,
+			_req: ApiRequest<Req>,
+		) -> Result<ApiResponse<Res>, TransportError> {
+			unreachable!()
+		}
+
+		fn close(&mut self) {}
+
+		fn innner_http_client(&self) -> anyhow::Result<reqwest::blocking::Client> {
+			Ok(self.0.clone())
+		}
+	}
+
+	#[test]
+	fn default_web_transport_uses_existing_http_accessor() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut request = [0; 1024];
+			let _ = stream.read(&mut request).unwrap();
+			stream
+				.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+				.unwrap();
+		});
+		let transport = AccessorOnlyTransport(
+			reqwest::blocking::Client::builder()
+				.no_proxy()
+				.build()
+				.unwrap(),
+		);
+		let no_query = [];
+
+		let response = transport
+			.send_web(WebRequest::new(
+				WebEndpoint::Test(&format!("http://{address}/request")),
+				&no_query,
+				"test-agent",
+				"session=test-cookie",
+				"en-US",
+			))
+			.unwrap();
+
+		assert_eq!(response.status(), 200);
+		assert_eq!(response.into_body(), "ok");
+		server.join().unwrap();
+	}
+
+	#[test]
+	fn builds_get_and_form_web_requests() {
+		let transport = WebApiTransport::new(
+			reqwest::blocking::Client::builder()
+				.no_proxy()
+				.build()
+				.unwrap(),
+		);
+		let query = [("key", Cow::Borrowed("value"))];
+		let get = build_web_request(
+			&transport.client,
+			WebRequest::new(
+				WebEndpoint::Test("https://example.invalid/request"),
+				&query,
+				"test-agent",
+				"session=test-cookie",
+				"en-US",
+			),
+		)
+		.unwrap()
+		.build()
+		.unwrap();
+
+		assert_eq!(get.method(), reqwest::Method::GET);
+		assert_eq!(get.url().query(), Some("key=value"));
+		assert_eq!(get.headers()[USER_AGENT], "test-agent");
+		assert_eq!(get.headers()[COOKIE], "session=test-cookie");
+
+		let no_query = [];
+		let post = build_web_request(&transport.client, {
+			WebRequest::new(
+				WebEndpoint::Test("https://example.invalid/request"),
+				&no_query,
+				"test-agent",
+				"session=test-cookie",
+				"en-US",
+			)
+			.with_origin("https://steamcommunity.com")
+			.with_form_body("key=value")
+		})
+		.unwrap()
+		.build()
+		.unwrap();
+
+		assert_eq!(post.method(), reqwest::Method::POST);
+		assert_eq!(post.headers()[ORIGIN], "https://steamcommunity.com");
+		assert_eq!(
+			post.headers()[CONTENT_TYPE],
+			"application/x-www-form-urlencoded; charset=UTF-8"
+		);
+		assert_eq!(
+			post.body().unwrap().as_bytes(),
+			Some(b"key=value".as_slice())
+		);
+	}
+
+	#[test]
+	fn web_request_and_response_debug_redact_sensitive_data() {
+		let query = [("key", Cow::Borrowed("query-secret-canary"))];
+		let request = WebRequest::new(
+			WebEndpoint::ConfirmationDetails("confirmation-id-canary"),
+			&query,
+			"agent-canary",
+			"cookie-secret-canary",
+			"language-canary",
+		)
+		.with_origin("origin-canary")
+		.with_form_body("request-body-canary");
+		let response = WebResponse {
+			status: 200,
+			body: "response-body-canary".to_owned(),
+		};
+
+		let output = format!("{request:?} {response:?}");
+		for canary in [
+			"query-secret-canary",
+			"confirmation-id-canary",
+			"agent-canary",
+			"cookie-secret-canary",
+			"language-canary",
+			"origin-canary",
+			"request-body-canary",
+			"response-body-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(output.contains("[REDACTED]"));
+	}
 
 	#[test]
 	fn api_request_and_response_debug_redact_payloads() {

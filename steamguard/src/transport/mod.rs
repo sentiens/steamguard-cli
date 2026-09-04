@@ -5,7 +5,7 @@ pub mod webapi;
 pub use network_error::{NetworkError, NetworkErrorKind};
 use protobuf::MessageFull;
 pub use proxy::{ProxyConfig, ProxyConfigError, ProxyTransportError};
-pub use webapi::WebApiTransport;
+pub use webapi::{WebApiTransport, WebEndpoint, WebRequest, WebResponse};
 
 use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest};
 
@@ -14,6 +14,13 @@ pub trait Transport {
 		&self,
 		req: ApiRequest<Req>,
 	) -> Result<ApiResponse<Res>, TransportError>;
+
+	fn send_web(&self, request: WebRequest<'_>) -> Result<WebResponse, NetworkError> {
+		let client = self
+			.innner_http_client()
+			.map_err(|_| NetworkError::unsupported_transport())?;
+		webapi::send_web(&client, request)
+	}
 
 	fn close(&mut self);
 
