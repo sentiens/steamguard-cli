@@ -9,6 +9,7 @@ use serde::Deserialize;
 use sha1::Sha1;
 
 use crate::{
+	endpoints,
 	steamapi::{self},
 	transport::{NetworkError, Transport, WebEndpoint, WebRequest},
 	SteamGuardAccount,
@@ -17,10 +18,6 @@ use crate::{
 const ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 const CONFIRMATION_USER_AGENT: &str =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36";
-
-lazy_static! {
-	static ref STEAM_COOKIE_URL: Url = "https://steamcommunity.com".parse::<Url>().unwrap();
-}
 
 /// Provides an interface that wraps the Steam mobile confirmation API.
 ///
@@ -62,13 +59,14 @@ where
 		.into()
 	}
 
-	fn build_cookie_jar(&self) -> reqwest::cookie::Jar {
+	fn build_cookie_jar(&self) -> anyhow::Result<(reqwest::cookie::Jar, Url)> {
+		let cookie_url = endpoints::community_url("")?;
 		let cookies = reqwest::cookie::Jar::default();
 		let tokens = self.account.tokens.as_ref().unwrap();
-		cookies.add_cookie_str("dob=", &STEAM_COOKIE_URL);
+		cookies.add_cookie_str("dob=", &cookie_url);
 		cookies.add_cookie_str(
 			format!("steamid={}", self.account.steam_id).as_str(),
-			&STEAM_COOKIE_URL,
+			&cookie_url,
 		);
 		cookies.add_cookie_str(
 			format!(
@@ -77,14 +75,14 @@ where
 				tokens.access_token().expose_secret()
 			)
 			.as_str(),
-			&STEAM_COOKIE_URL,
+			&cookie_url,
 		);
-		cookies
+		Ok((cookies, cookie_url))
 	}
 
 	pub fn get_confirmations(&self) -> Result<Vec<Confirmation>, ConfirmerError> {
-		let cookies = self.build_cookie_jar();
-		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let (cookies, cookie_url) = self.build_cookie_jar()?;
+		let cookie = cookies.cookies(&cookie_url).unwrap();
 		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
@@ -130,8 +128,8 @@ where
 		let conf = conf.into();
 		let operation = action.to_operation();
 
-		let cookies = self.build_cookie_jar();
-		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let (cookies, cookie_url) = self.build_cookie_jar()?;
+		let cookie = cookies.cookies(&cookie_url).unwrap();
 		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
@@ -148,7 +146,7 @@ where
 				cookie,
 				ACCEPT_LANGUAGE,
 			)
-			.with_origin("https://steamcommunity.com"),
+			.with_origin(endpoints::community_base_url()),
 		)?;
 
 		debug!(
@@ -212,8 +210,8 @@ where
 		}
 		let operation = action.to_operation();
 
-		let cookies = self.build_cookie_jar();
-		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let (cookies, cookie_url) = self.build_cookie_jar()?;
+		let cookie = cookies.cookies(&cookie_url).unwrap();
 		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();
@@ -240,7 +238,7 @@ where
 				cookie,
 				ACCEPT_LANGUAGE,
 			)
-			.with_origin("https://steamcommunity.com")
+			.with_origin(endpoints::community_base_url())
 			.with_form_body(&query_params),
 		)?;
 
@@ -339,8 +337,8 @@ where
 			pub html: String,
 		}
 
-		let cookies = self.build_cookie_jar();
-		let cookie = cookies.cookies(&STEAM_COOKIE_URL).unwrap();
+		let (cookies, cookie_url) = self.build_cookie_jar()?;
+		let cookie = cookies.cookies(&cookie_url).unwrap();
 		let cookie = cookie.to_str().unwrap();
 
 		let time = steamapi::get_server_time(self.transport.clone())?.server_time();

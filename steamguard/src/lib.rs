@@ -20,6 +20,7 @@ pub mod accountlinker;
 mod api_responses;
 pub mod approver;
 mod confirmation;
+mod endpoints;
 pub mod phonelinker;
 pub mod protobufs;
 pub mod refresher;

@@ -9,7 +9,10 @@ use reqwest::{
 };
 
 use super::{NetworkError, ProxyConfig, ProxyTransportError, Transport, TransportError};
-use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult};
+use crate::{
+	endpoints,
+	steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult},
+};
 
 #[derive(Clone)]
 pub struct WebApiTransport {
@@ -217,16 +220,14 @@ impl WebEndpoint<'_> {
 
 	fn url(self) -> Result<Url, NetworkError> {
 		match self {
-			Self::ConfirmationList => Url::parse("https://steamcommunity.com/mobileconf/getlist")
+			Self::ConfirmationList => endpoints::community_url("mobileconf/getlist")
 				.map_err(|_| NetworkError::invalid_request()),
-			Self::ConfirmationAction => Url::parse("https://steamcommunity.com/mobileconf/ajaxop")
+			Self::ConfirmationAction => endpoints::community_url("mobileconf/ajaxop")
 				.map_err(|_| NetworkError::invalid_request()),
-			Self::ConfirmationBulkAction => {
-				Url::parse("https://steamcommunity.com/mobileconf/multiajaxop")
-					.map_err(|_| NetworkError::invalid_request())
-			}
+			Self::ConfirmationBulkAction => endpoints::community_url("mobileconf/multiajaxop")
+				.map_err(|_| NetworkError::invalid_request()),
 			Self::ConfirmationDetails(id) => {
-				let mut url = Url::parse("https://steamcommunity.com/mobileconf/details/")
+				let mut url = endpoints::community_url("mobileconf/details/")
 					.map_err(|_| NetworkError::invalid_request())?;
 				url.path_segments_mut()
 					.map_err(|_| NetworkError::invalid_request())?

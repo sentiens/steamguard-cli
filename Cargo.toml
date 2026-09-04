@@ -18,6 +18,7 @@ default = ["qr", "updater", "keyring"]
 qr = ["dep:qrcode"]
 updater = ["dep:update-informer"]
 keyring = ["dep:keyring"]
+test-endpoints = ["steamguard/test-endpoints"]
 
 # [[bin]]
 # name = "steamguard-cli"

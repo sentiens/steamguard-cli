@@ -2,7 +2,7 @@ pub mod authentication;
 pub mod phone;
 pub mod twofactor;
 
-use crate::transport::Transport;
+use crate::{endpoints, transport::Transport};
 use crate::{protobufs::service_twofactor::CTwoFactor_Time_Response, token::Jwt};
 use serde::Deserialize;
 use std::fmt;
@@ -10,10 +10,6 @@ use std::fmt;
 pub use self::authentication::AuthenticationClient;
 pub use self::phone::PhoneClient;
 pub use self::twofactor::TwoFactorClient;
-
-lazy_static! {
-	static ref STEAM_API_BASE: String = "https://api.steampowered.com".into();
-}
 
 /// Queries Steam for the current time. A convenience function around TwoFactorClient.
 ///
@@ -84,9 +80,17 @@ impl<'a, T: BuildableRequest> ApiRequest<'a, T> {
 	}
 
 	pub(crate) fn build_url(&self) -> String {
+		let base_url = if self.api_interface == "IAuthenticationService" {
+			endpoints::login_base_url()
+		} else {
+			endpoints::api_base_url()
+		};
 		format!(
 			"{}/{}/{}/v{}",
-			*STEAM_API_BASE, self.api_interface, self.api_method, self.api_version
+			base_url.trim_end_matches('/'),
+			self.api_interface,
+			self.api_method,
+			self.api_version
 		)
 	}
 
