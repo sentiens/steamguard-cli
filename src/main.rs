@@ -42,7 +42,7 @@ fn main() {
 		.module("steamguard")
 		.init()
 		.unwrap();
-	debug!("{:?}", args);
+	debug!("command-line arguments parsed");
 	#[cfg(feature = "updater")]
 	let should_do_update_check = !args.global.no_update_check;
 

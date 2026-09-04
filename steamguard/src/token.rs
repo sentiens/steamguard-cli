@@ -3,10 +3,18 @@ use hmac::{Hmac, Mac};
 use secrecy::{ExposeSecret, Secret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
-use std::convert::TryInto;
+use std::{convert::TryInto, fmt};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TwoFactorSecret(Secret<[u8; 20]>);
+
+impl fmt::Debug for TwoFactorSecret {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_tuple("TwoFactorSecret")
+			.field(&"[REDACTED]")
+			.finish()
+	}
+}
 
 impl Default for TwoFactorSecret {
 	fn default() -> Self {
@@ -101,10 +109,19 @@ fn build_time_bytes(time: u64) -> [u8; 8] {
 	time.to_be_bytes()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Tokens {
 	access_token: Jwt,
 	refresh_token: Jwt,
+}
+
+impl fmt::Debug for Tokens {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Tokens")
+			.field("access_token", &"[REDACTED]")
+			.field("refresh_token", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl Tokens {
@@ -128,8 +145,14 @@ impl Tokens {
 	}
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Jwt(SecretString);
+
+impl fmt::Debug for Jwt {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_tuple("Jwt").field(&"[REDACTED]").finish()
+	}
+}
 
 impl Serialize for Jwt {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -167,7 +190,7 @@ fn decode_jwt(jwt: impl AsRef<str>) -> anyhow::Result<SteamJwtData> {
 	Ok(jwt_data)
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 pub struct SteamJwtData {
 	pub exp: u64,
 	pub iat: u64,
@@ -177,6 +200,19 @@ pub struct SteamJwtData {
 	/// Subject (steam id)
 	pub sub: String,
 	pub jti: String,
+}
+
+impl fmt::Debug for SteamJwtData {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("SteamJwtData")
+			.field("exp", &self.exp)
+			.field("iat", &self.iat)
+			.field("iss", &"[REDACTED]")
+			.field("aud", &"[REDACTED]")
+			.field("sub", &"[REDACTED]")
+			.field("jti", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl SteamJwtData {
@@ -247,6 +283,42 @@ mod tests {
 		let code = secret.generate_code(1616374841u64);
 		assert_eq!(code, "2F9J5");
 		Ok(())
+	}
+
+	#[test]
+	fn debug_output_redacts_secrets_tokens_and_jwt_data() {
+		let raw_secret = b"two-factor-canary!!!".to_vec();
+		let raw_secret_debug = format!("{raw_secret:?}");
+		let two_factor_secret = TwoFactorSecret::from_bytes(raw_secret);
+		let tokens = Tokens::new(
+			"access-token-canary".to_owned(),
+			"refresh-token-canary".to_owned(),
+		);
+		let jwt = Jwt::from("raw-jwt-canary".to_owned());
+		let jwt_data = SteamJwtData {
+			exp: 1,
+			iat: 2,
+			iss: "issuer-canary".to_owned(),
+			aud: vec!["audience-canary".to_owned()],
+			sub: "subject-canary".to_owned(),
+			jti: "identifier-canary".to_owned(),
+		};
+
+		let output = format!("{two_factor_secret:?} {tokens:?} {jwt:?} {jwt_data:?}");
+		for canary in [
+			"two-factor-canary!!!",
+			"access-token-canary",
+			"refresh-token-canary",
+			"raw-jwt-canary",
+			"issuer-canary",
+			"audience-canary",
+			"subject-canary",
+			"identifier-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(!output.contains(&raw_secret_debug));
+		assert!(output.contains("[REDACTED]"));
 	}
 
 	#[test]

@@ -5,6 +5,7 @@ pub mod twofactor;
 use crate::transport::Transport;
 use crate::{protobufs::service_twofactor::CTwoFactor_Time_Response, token::Jwt};
 use serde::Deserialize;
+use std::fmt;
 
 pub use self::authentication::AuthenticationClient;
 pub use self::phone::PhoneClient;
@@ -33,13 +34,28 @@ pub trait BuildableRequest {
 	fn requires_access_token() -> bool;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiRequest<'a, T> {
 	api_interface: String,
 	api_method: String,
 	api_version: u32,
 	access_token: Option<&'a Jwt>,
 	request_data: T,
+}
+
+impl<T> fmt::Debug for ApiRequest<'_, T> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("ApiRequest")
+			.field("api_interface", &self.api_interface)
+			.field("api_method", &self.api_method)
+			.field("api_version", &self.api_version)
+			.field(
+				"access_token",
+				&self.access_token.as_ref().map(|_| "[REDACTED]"),
+			)
+			.field("request_data", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl<'a, T: BuildableRequest> ApiRequest<'a, T> {
@@ -79,11 +95,24 @@ impl<'a, T: BuildableRequest> ApiRequest<'a, T> {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiResponse<T> {
 	pub(crate) result: EResult,
 	pub(crate) error_message: Option<String>,
 	pub(crate) response_data: T,
+}
+
+impl<T> fmt::Debug for ApiResponse<T> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("ApiResponse")
+			.field("result", &self.result)
+			.field(
+				"error_message",
+				&self.error_message.as_ref().map(|_| "[REDACTED]"),
+			)
+			.field("response_data", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl<T> ApiResponse<T> {

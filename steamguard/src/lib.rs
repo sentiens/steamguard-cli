@@ -5,7 +5,7 @@ pub use approver::{ApproverError, LoginApprover};
 pub use confirmation::*;
 pub use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use std::io::Read;
+use std::{fmt, io::Read};
 use token::Tokens;
 use transport::{Transport, TransportError};
 pub use userlogin::{DeviceDetails, LoginError, UserLogin};
@@ -32,7 +32,7 @@ pub mod userlogin;
 extern crate base64;
 extern crate cookie;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SteamGuardAccount {
 	pub account_name: String,
 	pub steam_id: u64,
@@ -49,6 +49,24 @@ pub struct SteamGuardAccount {
 	#[serde(with = "secret_string")]
 	pub secret_1: SecretString,
 	pub tokens: Option<Tokens>,
+}
+
+impl fmt::Debug for SteamGuardAccount {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("SteamGuardAccount")
+			.field("account_name", &self.account_name)
+			.field("steam_id", &self.steam_id)
+			.field("serial_number", &"[REDACTED]")
+			.field("revocation_code", &"[REDACTED]")
+			.field("shared_secret", &"[REDACTED]")
+			.field("token_gid", &"[REDACTED]")
+			.field("identity_secret", &"[REDACTED]")
+			.field("uri", &"[REDACTED]")
+			.field("device_id", &self.device_id)
+			.field("secret_1", &"[REDACTED]")
+			.field("tokens", &self.tokens.as_ref().map(|_| "[REDACTED]"))
+			.finish()
+	}
 }
 
 impl Default for SteamGuardAccount {
@@ -116,5 +134,45 @@ impl SteamGuardAccount {
 			Some(revocation_code.unwrap_or_else(|| self.revocation_code.expose_secret()));
 		let linker = AccountLinker::new(transport, tokens.clone());
 		linker.remove_authenticator(revocation_code)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn account_debug_output_redacts_authenticator_secrets() {
+		let account = SteamGuardAccount {
+			account_name: "account-name".to_owned(),
+			steam_id: 1,
+			serial_number: "serial-canary".to_owned(),
+			revocation_code: "revocation-canary".to_owned().into(),
+			shared_secret: TwoFactorSecret::from_bytes(vec![42; 20]),
+			token_gid: "token-gid-canary".to_owned(),
+			identity_secret: "identity-canary".to_owned().into(),
+			uri: "uri-canary".to_owned().into(),
+			device_id: "device-id".to_owned(),
+			secret_1: "secret-one-canary".to_owned().into(),
+			tokens: Some(Tokens::new(
+				"access-token-canary".to_owned(),
+				"refresh-token-canary".to_owned(),
+			)),
+		};
+
+		let output = format!("{account:?}");
+		for canary in [
+			"serial-canary",
+			"revocation-canary",
+			"token-gid-canary",
+			"identity-canary",
+			"uri-canary",
+			"secret-one-canary",
+			"access-token-canary",
+			"refresh-token-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(output.contains("[REDACTED]"));
 	}
 }

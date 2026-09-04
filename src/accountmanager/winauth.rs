@@ -40,7 +40,7 @@ pub(crate) fn parse_winauth_exports(buf: Vec<u8>) -> anyhow::Result<Vec<External
 			.context("missing data field")?
 			.1;
 
-		trace!("data: {}", data);
+		trace!("parsed WinAuth authenticator data");
 
 		let mut deser = serde_json::Deserializer::from_str(&data);
 		let account = serde_path_to_error::deserialize(&mut deser)?;

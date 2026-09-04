@@ -22,7 +22,7 @@ use anyhow::Context;
 use base64::Engine;
 use log::*;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 #[derive(Debug)]
 pub enum LoginError {
@@ -73,10 +73,22 @@ impl From<EResult> for LoginError {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BeginQrLoginResponse {
 	challenge_url: String,
 	confirmation_methonds: Vec<AllowedConfirmation>,
+}
+
+impl fmt::Debug for BeginQrLoginResponse {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("BeginQrLoginResponse")
+			.field("challenge_url", &"[REDACTED]")
+			.field(
+				"confirmation_method_count",
+				&self.confirmation_methonds.len(),
+			)
+			.finish()
+	}
 }
 
 impl BeginQrLoginResponse {
@@ -90,7 +102,6 @@ impl BeginQrLoginResponse {
 }
 
 /// Handles the user login flow.
-#[derive(Debug)]
 pub struct UserLogin<T>
 where
 	T: Transport + Clone,
@@ -99,6 +110,18 @@ where
 	device_details: DeviceDetails,
 
 	started_auth: Option<StartAuth>,
+}
+
+impl<T> fmt::Debug for UserLogin<T>
+where
+	T: Transport + Clone,
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("UserLogin")
+			.field("device_details", &self.device_details)
+			.field("started_auth", &self.started_auth)
+			.finish_non_exhaustive()
+	}
 }
 
 impl<T> UserLogin<T>
@@ -310,10 +333,20 @@ fn encrypt_password(
 	)
 }
 
-#[derive(Debug)]
 enum StartAuth {
 	BeginAuthSessionViaCredentials(CAuthentication_BeginAuthSessionViaCredentials_Response),
 	BeginAuthSessionViaQR(CAuthentication_BeginAuthSessionViaQR_Response),
+}
+
+impl fmt::Debug for StartAuth {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::BeginAuthSessionViaCredentials(_) => {
+				f.write_str("BeginAuthSessionViaCredentials([REDACTED])")
+			}
+			Self::BeginAuthSessionViaQR(_) => f.write_str("BeginAuthSessionViaQR([REDACTED])"),
+		}
+	}
 }
 
 impl StartAuth {
@@ -498,5 +531,22 @@ mod tests {
 		rsa_resp.set_timestamp(104444850000);
 		let result = encrypt_password(rsa_resp, "foo");
 		assert_eq!(result, "jmlMXmhbweWn+wJnnf96W3Lsh0dRmzrBfMxREUuEW11rRYcfXWupBIT3eK1fmQHMZmyJeMhZiRpgIaZ7DafojQT6djJr+RKeREJs0ys9hKwxD5FGlqsTLXXEeuyopyd2smHBbmmF47voe59KEoiZZapP+eYnpJy3O2k7e1P9BH9LsKIN/nWF1ogM2jjJ328AejUpM64tPl/kInFJ1CHrLiAAKDPk42fLAAKs97xIi0JkosG6yp+8HhFqQxxZ8/bNI1IVkQC1Hdc2AN0QlNKxbDXquAn6ARgw/4b5DwUpnOb9de+Q6iX3v1/M07Se7JV8/4tuz8Thy2Chbxsf9E1TuQ==");
+	}
+
+	#[test]
+	fn qr_login_response_debug_redacts_the_challenge() {
+		let response = BeginQrLoginResponse {
+			challenge_url: "challenge-url-canary".to_owned(),
+			confirmation_methonds: vec![AllowedConfirmation {
+				confirmation_type:
+					EAuthSessionGuardType::k_EAuthSessionGuardType_DeviceConfirmation,
+				associated_messsage: "confirmation-message-canary".to_owned(),
+			}],
+		};
+
+		let output = format!("{response:?}");
+		assert!(!output.contains("challenge-url-canary"));
+		assert!(!output.contains("confirmation-message-canary"));
+		assert!(output.contains("[REDACTED]"));
 	}
 }

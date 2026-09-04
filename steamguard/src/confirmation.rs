@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -103,9 +103,9 @@ where
 			.query(&self.get_confirmation_query_params("conf", time))
 			.send()?;
 
-		trace!("{:?}", resp);
+		trace!("Confirmation list response status: {}", resp.status());
 		let text = resp.text().unwrap();
-		debug!("Confirmations response: {}", text);
+		debug!("Confirmation list response length: {} bytes", text.len());
 
 		let mut deser = serde_json::Deserializer::from_str(text.as_str());
 		let body: ConfirmationListResponse = serde_path_to_error::deserialize(&mut deser)?;
@@ -158,14 +158,16 @@ where
 			.query(&query_params)
 			.send()?;
 
-		trace!("send_confirmation_ajax() response: {:?}", &resp);
 		debug!(
 			"send_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
 		let raw = resp.text()?;
-		debug!("send_confirmation_ajax() response body: {:?}", &raw);
+		trace!(
+			"send_confirmation_ajax() response body length: {} bytes",
+			raw.len()
+		);
 
 		let mut deser = serde_json::Deserializer::from_str(raw.as_str());
 		let body: SendConfirmationResponse = serde_path_to_error::deserialize(&mut deser)?;
@@ -230,7 +232,10 @@ where
 		}
 		let query_params = self.build_multi_conf_query_string(&query_params);
 		// despite being called query parameters, they will actually go in the body
-		debug!("query_params: {}", &query_params);
+		debug!(
+			"bulk confirmation request body length: {} bytes",
+			query_params.len()
+		);
 
 		let resp = client
 			.post(
@@ -249,14 +254,16 @@ where
 			.body(query_params)
 			.send()?;
 
-		trace!("send_multi_confirmation_ajax() response: {:?}", &resp);
 		debug!(
 			"send_multi_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
 		let raw = resp.text()?;
-		debug!("send_multi_confirmation_ajax() response body: {:?}", &raw);
+		trace!(
+			"send_multi_confirmation_ajax() response body length: {} bytes",
+			raw.len()
+		);
 
 		let mut deser = serde_json::Deserializer::from_str(raw.as_str());
 		let body: SendConfirmationResponse = serde_path_to_error::deserialize(&mut deser)?;
@@ -336,7 +343,7 @@ where
 		&self,
 		conf: impl Into<ConfirmationId<'id>>,
 	) -> anyhow::Result<String> {
-		#[derive(Debug, Clone, Deserialize)]
+		#[derive(Clone, Deserialize)]
 		struct ConfirmationDetailsResponse {
 			pub success: bool,
 			pub html: String,
@@ -404,7 +411,7 @@ pub enum ConfirmerError {
 }
 
 /// A mobile confirmation. There are multiple things that can be confirmed, like trade offers.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct Confirmation {
 	#[serde(rename = "type")]
 	pub conf_type: ConfirmationType,
@@ -422,6 +429,25 @@ pub struct Confirmation {
 	pub summary: Vec<String>,
 }
 
+impl fmt::Debug for Confirmation {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Confirmation")
+			.field("conf_type", &self.conf_type)
+			.field("type_name", &"[REDACTED]")
+			.field("id", &"[REDACTED]")
+			.field("creator_id", &"[REDACTED]")
+			.field("nonce", &"[REDACTED]")
+			.field("creation_time", &self.creation_time)
+			.field("cancel", &"[REDACTED]")
+			.field("accept", &"[REDACTED]")
+			.field("icon", &self.icon.as_ref().map(|_| "[REDACTED]"))
+			.field("multi", &self.multi)
+			.field("headline", &"[REDACTED]")
+			.field("summary", &"[REDACTED]")
+			.finish()
+	}
+}
+
 impl Confirmation {
 	/// Human readable representation of this confirmation.
 	pub fn description(&self) -> String {
@@ -434,10 +460,19 @@ impl Confirmation {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ConfirmationId<'a> {
 	pub id: &'a str,
 	pub nonce: &'a str,
+}
+
+impl fmt::Debug for ConfirmationId<'_> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("ConfirmationId")
+			.field("id", &"[REDACTED]")
+			.field("nonce", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl<'a> ConfirmationId<'a> {
@@ -478,7 +513,7 @@ pub enum ConfirmationType {
 	Unknown(u32),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct ConfirmationListResponse {
 	pub success: bool,
 	#[serde(default)]
@@ -489,13 +524,34 @@ pub struct ConfirmationListResponse {
 	pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl fmt::Debug for ConfirmationListResponse {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("ConfirmationListResponse")
+			.field("success", &self.success)
+			.field("needauth", &self.needauth)
+			.field("confirmation_count", &self.conf.len())
+			.field("message", &self.message.as_ref().map(|_| "[REDACTED]"))
+			.finish()
+	}
+}
+
+#[derive(Clone, Deserialize)]
 pub struct SendConfirmationResponse {
 	pub success: bool,
 	#[serde(default)]
 	pub needsauth: Option<bool>,
 	#[serde(default)]
 	pub message: Option<String>,
+}
+
+impl fmt::Debug for SendConfirmationResponse {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("SendConfirmationResponse")
+			.field("success", &self.success)
+			.field("needsauth", &self.needsauth)
+			.field("message", &self.message.as_ref().map(|_| "[REDACTED]"))
+			.finish()
+	}
 }
 
 fn build_time_bytes(time: u64) -> [u8; 8] {
@@ -575,5 +631,54 @@ mod tests {
 			generate_confirmation_hash_for_time(1617591917, "conf", "GQP46b73Ws7gr8GmZFR0sDuau5c="),
 			String::from("NaL8EIMhfy/7vBounJ0CvpKbrPk=")
 		);
+	}
+
+	#[test]
+	fn confirmation_debug_output_redacts_response_and_query_values() {
+		let confirmation = Confirmation {
+			conf_type: ConfirmationType::Trade,
+			type_name: "type-name-canary".to_owned(),
+			id: "confirmation-id-canary".to_owned(),
+			creator_id: "creator-id-canary".to_owned(),
+			nonce: "nonce-canary".to_owned(),
+			creation_time: 1,
+			cancel: "cancel-label-canary".to_owned(),
+			accept: "accept-label-canary".to_owned(),
+			icon: Some("icon-canary".to_owned()),
+			multi: false,
+			headline: "headline-canary".to_owned(),
+			summary: vec!["summary-canary".to_owned()],
+		};
+		let confirmation_id = ConfirmationId::new(&confirmation.id, &confirmation.nonce);
+		let response = ConfirmationListResponse {
+			success: true,
+			needauth: None,
+			conf: vec![confirmation.clone()],
+			message: Some("list-message-canary".to_owned()),
+		};
+		let action_response = SendConfirmationResponse {
+			success: false,
+			needsauth: None,
+			message: Some("action-message-canary".to_owned()),
+		};
+
+		let output =
+			format!("{confirmation:?} {confirmation_id:?} {response:?} {action_response:?}");
+		for canary in [
+			"type-name-canary",
+			"confirmation-id-canary",
+			"creator-id-canary",
+			"nonce-canary",
+			"cancel-label-canary",
+			"accept-label-canary",
+			"icon-canary",
+			"headline-canary",
+			"summary-canary",
+			"list-message-canary",
+			"action-message-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(output.contains("[REDACTED]"));
 	}
 }

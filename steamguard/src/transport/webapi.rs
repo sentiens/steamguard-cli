@@ -58,7 +58,7 @@ impl Transport for WebApiTransport {
 
 		let url = apireq.build_url();
 		debug!("HTTP Request: {} {}", Req::method(), url);
-		trace!("Request body: {:#?}", apireq.request_data());
+		trace!("HTTP request metadata: {apireq:#?}");
 		let mut req = self.client.request(Req::method(), &url);
 
 		req = if Req::method() == reqwest::Method::GET {
@@ -111,7 +111,7 @@ impl Transport for WebApiTransport {
 					header: "x-error_message".to_owned(),
 					source: err.into(),
 				})?;
-			debug!("HTTP Header x-error_message: {}", s);
+			debug!("HTTP Header x-error_message was present");
 			Some(s.to_owned())
 		} else {
 			None
@@ -119,7 +119,7 @@ impl Transport for WebApiTransport {
 
 		let bytes = resp.bytes()?;
 		if !status.is_success() {
-			trace!("Response body (raw): {:?}", bytes);
+			trace!("Error response body length: {} bytes", bytes.len());
 
 			if status == reqwest::StatusCode::UNAUTHORIZED {
 				return Err(TransportError::Unauthorized);
@@ -127,12 +127,12 @@ impl Transport for WebApiTransport {
 		}
 
 		let res = decode_msg::<Res>(bytes.as_ref())?;
-		trace!("Response body (decoded): {:#?}", res);
 		let api_resp = ApiResponse {
 			result: eresult,
 			error_message: error_msg,
 			response_data: res,
 		};
+		trace!("HTTP response metadata: {api_resp:#?}");
 
 		Ok(api_resp)
 	}
@@ -166,10 +166,37 @@ mod tests {
 		CAuthentication_BeginAuthSessionViaCredentials_Request,
 		CAuthentication_GetPasswordRSAPublicKey_Response,
 		CAuthentication_PollAuthSessionStatus_Response,
+		CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request,
 	};
+	use crate::{steamapi::EResult, token::Jwt};
 
 	use super::*;
 	use base64::{engine::general_purpose::STANDARD, Engine};
+
+	#[test]
+	fn api_request_and_response_debug_redact_payloads() {
+		let token = Jwt::from("access-token-canary".to_owned());
+		let mut request_data = CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request::new();
+		request_data.set_code("request-body-canary".to_owned());
+		let request = ApiRequest::new("ITestService", "SubmitSecret", 1, request_data)
+			.with_access_token(&token);
+		let response = ApiResponse {
+			result: EResult::Fail,
+			error_message: Some("response-error-canary".to_owned()),
+			response_data: "response-body-canary",
+		};
+
+		let output = format!("{request:?} {response:?}");
+		for canary in [
+			"access-token-canary",
+			"request-body-canary",
+			"response-error-canary",
+			"response-body-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(output.contains("[REDACTED]"));
+	}
 
 	#[test]
 	fn socks5h_proxy_uses_remote_dns_and_credentials() {

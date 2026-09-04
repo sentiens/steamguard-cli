@@ -1,13 +1,23 @@
 use serde::Deserialize;
+use std::fmt;
 
 use crate::protobufs::steammessages_auth_steamclient::{
 	CAuthentication_AllowedConfirmation, EAuthSessionGuardType,
 };
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct AllowedConfirmation {
 	pub confirmation_type: EAuthSessionGuardType,
 	pub associated_messsage: String,
+}
+
+impl fmt::Debug for AllowedConfirmation {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("AllowedConfirmation")
+			.field("confirmation_type", &self.confirmation_type)
+			.field("associated_messsage", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl From<AllowedConfirmation> for CAuthentication_AllowedConfirmation {

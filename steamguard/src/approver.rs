@@ -2,6 +2,7 @@ use hmac::{Hmac, Mac};
 use log::debug;
 use reqwest::IntoUrl;
 use sha2::Sha256;
+use std::fmt;
 
 use crate::{
 	protobufs::{
@@ -178,10 +179,18 @@ pub fn parse_challenge_url(challenge_url: impl IntoUrl) -> Result<Challenge, App
 ///
 /// The client_id is a unique identifier for this challenge. It is used to identify the challenge when approving it.
 /// The version is the version of the challenge. It should be 1.
-#[derive(Debug)]
 pub struct Challenge {
 	version: u16,
 	client_id: u64,
+}
+
+impl fmt::Debug for Challenge {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Challenge")
+			.field("version", &self.version)
+			.field("client_id", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl Challenge {
@@ -265,6 +274,15 @@ mod tests {
 			let challenge = parse_challenge_url(url);
 			assert!(challenge.is_err(), "url: {}", url);
 		}
+	}
+
+	#[test]
+	fn challenge_debug_output_redacts_client_id() {
+		let challenge = Challenge::new(1, 4242424242424242);
+		let output = format!("{challenge:?}");
+
+		assert!(!output.contains("4242424242424242"));
+		assert!(output.contains("[REDACTED]"));
 	}
 
 	#[test]

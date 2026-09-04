@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+	fmt,
+	sync::{Arc, Mutex},
+};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
@@ -94,7 +97,7 @@ pub(crate) struct Args {
 	pub code: CodeCommand,
 }
 
-#[derive(Debug, Clone, Parser)]
+#[derive(Clone, Parser)]
 pub(crate) struct GlobalArgs {
 	#[clap(
 		short,
@@ -165,6 +168,35 @@ pub(crate) struct GlobalArgs {
 		long_help = "Accept invalid TLS certificates. Be warned, this is insecure and enables man-in-the-middle attacks."
 	)]
 	pub danger_accept_invalid_certs: bool,
+}
+
+impl fmt::Debug for GlobalArgs {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let mut debug = f.debug_struct("GlobalArgs");
+		debug
+			.field("username", &self.username)
+			.field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+			.field("all", &self.all)
+			.field("mafiles_path", &self.mafiles_path)
+			.field("passkey", &self.passkey.as_ref().map(|_| "[REDACTED]"))
+			.field("verbosity", &self.verbosity);
+		#[cfg(feature = "updater")]
+		debug.field("no_update_check", &self.no_update_check);
+		debug
+			.field(
+				"http_proxy",
+				&self.http_proxy.as_ref().map(|_| "[REDACTED]"),
+			)
+			.field(
+				"proxy_credentials",
+				&self.proxy_credentials.as_ref().map(|_| "[REDACTED]"),
+			)
+			.field(
+				"danger_accept_invalid_certs",
+				&self.danger_accept_invalid_certs,
+			)
+			.finish()
+	}
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -242,5 +274,33 @@ mod tests {
 	fn verify_cli() {
 		use clap::CommandFactory;
 		Args::command().debug_assert()
+	}
+
+	#[test]
+	fn command_line_debug_output_redacts_credentials() {
+		let args = Args::try_parse_from([
+			"steamguard",
+			"--password",
+			"account-password-canary",
+			"--passkey",
+			"encryption-passkey-canary",
+			"--http-proxy",
+			"http://proxy-url-canary:8080",
+			"--proxy-credentials",
+			"proxy-user-canary:proxy-password-canary",
+		])
+		.unwrap();
+
+		let output = format!("{args:?}");
+		for canary in [
+			"account-password-canary",
+			"encryption-passkey-canary",
+			"proxy-url-canary",
+			"proxy-user-canary",
+			"proxy-password-canary",
+		] {
+			assert!(!output.contains(canary));
+		}
+		assert!(output.contains("[REDACTED]"));
 	}
 }

@@ -1,4 +1,5 @@
 use std::{
+	fmt,
 	path::{Path, PathBuf},
 	sync::{Arc, Mutex},
 };
@@ -44,7 +45,7 @@ where
 		}
 
 		let url = self.login_url_source.url()?;
-		debug!("Using login URL to approve: {}", url);
+		debug!("Using login URL to approve");
 		loop {
 			let Some(tokens) = account.tokens.as_ref() else {
 				error!(
@@ -79,7 +80,7 @@ where
 	}
 }
 
-#[derive(Debug, Clone, clap::Args)]
+#[derive(Clone, clap::Args)]
 #[group(required = true, multiple = false)]
 pub struct LoginUrlSource {
 	/// The URL that would normally open in the Steam app. This is the URL that the QR code is displaying. It should start with \"https://s.team/...\"
@@ -88,6 +89,15 @@ pub struct LoginUrlSource {
 	/// Path to an image file containing the QR code. The QR code will be scanned from this image.
 	#[clap(long)]
 	image: Option<PathBuf>,
+}
+
+impl fmt::Debug for LoginUrlSource {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("LoginUrlSource")
+			.field("url", &self.url.as_ref().map(|_| "[REDACTED]"))
+			.field("image", &self.image)
+			.finish()
+	}
 }
 
 impl LoginUrlSource {
@@ -128,5 +138,17 @@ mod tests {
 		let path = Path::new("src/fixtures/qr-codes/login-qr.png");
 		let url = read_qr_image(path).unwrap();
 		assert_eq!(url, "https://s.team/q/1/2372462679780599330");
+	}
+
+	#[test]
+	fn login_url_debug_output_redacts_the_challenge() {
+		let source = LoginUrlSource {
+			url: Some("https://s.team/q/1/4242424242424242".to_owned()),
+			image: None,
+		};
+		let output = format!("{source:?}");
+
+		assert!(!output.contains("4242424242424242"));
+		assert!(output.contains("[REDACTED]"));
 	}
 }
