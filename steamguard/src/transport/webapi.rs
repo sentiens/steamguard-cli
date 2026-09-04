@@ -156,6 +156,12 @@ fn decode_msg<T: MessageFull>(bytes: &[u8]) -> Result<T, protobuf::Error> {
 
 #[cfg(test)]
 mod tests {
+	use std::{
+		io::{Read, Write},
+		net::TcpListener,
+		thread,
+	};
+
 	use crate::protobufs::steammessages_auth_steamclient::{
 		CAuthentication_BeginAuthSessionViaCredentials_Request,
 		CAuthentication_GetPasswordRSAPublicKey_Response,
@@ -164,6 +170,72 @@ mod tests {
 
 	use super::*;
 	use base64::{engine::general_purpose::STANDARD, Engine};
+
+	#[test]
+	fn socks5h_proxy_uses_remote_dns_and_credentials() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let proxy_address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+
+			let mut greeting = [0; 2];
+			stream.read_exact(&mut greeting).unwrap();
+			assert_eq!(greeting[0], 5);
+			let mut methods = vec![0; greeting[1] as usize];
+			stream.read_exact(&mut methods).unwrap();
+			assert!(methods.contains(&2));
+			stream.write_all(&[5, 2]).unwrap();
+
+			let mut auth = [0; 2];
+			stream.read_exact(&mut auth).unwrap();
+			assert_eq!(auth[0], 1);
+			let mut username = vec![0; auth[1] as usize];
+			stream.read_exact(&mut username).unwrap();
+			let mut password_length = [0];
+			stream.read_exact(&mut password_length).unwrap();
+			let mut password = vec![0; password_length[0] as usize];
+			stream.read_exact(&mut password).unwrap();
+			stream.write_all(&[1, 0]).unwrap();
+
+			let mut request = [0; 4];
+			stream.read_exact(&mut request).unwrap();
+			assert_eq!(request, [5, 1, 0, 3]);
+			let mut domain_length = [0];
+			stream.read_exact(&mut domain_length).unwrap();
+			let mut domain = vec![0; domain_length[0] as usize];
+			stream.read_exact(&mut domain).unwrap();
+			let mut port = [0; 2];
+			stream.read_exact(&mut port).unwrap();
+
+			stream.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).unwrap();
+			(
+				String::from_utf8(username).unwrap(),
+				String::from_utf8(password).unwrap(),
+				String::from_utf8(domain).unwrap(),
+				u16::from_be_bytes(port),
+			)
+		});
+
+		let proxy = ProxyConfig::new(format!("socks5h://{proxy_address}"))
+			.unwrap()
+			.with_basic_auth("socks-user-canary", "socks-password-canary");
+		let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
+		let error = transport
+			.innner_http_client()
+			.unwrap()
+			.get("http://remote-name.invalid:8080/proxy-check")
+			.send()
+			.unwrap_err();
+
+		let output = format!("{error:?} {error}");
+		assert!(!output.contains("socks-user-canary"));
+		assert!(!output.contains("socks-password-canary"));
+		let (username, password, domain, port) = server.join().unwrap();
+		assert_eq!(username, "socks-user-canary");
+		assert_eq!(password, "socks-password-canary");
+		assert_eq!(domain, "remote-name.invalid");
+		assert_eq!(port, 8080);
+	}
 
 	#[test]
 	fn test_parse_poll_response() {

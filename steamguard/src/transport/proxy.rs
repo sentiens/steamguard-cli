@@ -5,7 +5,8 @@ use secrecy::{ExposeSecret, SecretString};
 
 /// Proxy settings used to construct a [`super::WebApiTransport`].
 ///
-/// HTTP and HTTPS proxy URLs are supported. SOCKS proxy URLs require reqwest's `socks` feature.
+/// HTTP, HTTPS, SOCKS5, and `socks5h` proxy URLs are supported. Use `socks5h` when destination
+/// names must be resolved by the proxy.
 #[derive(Clone)]
 pub struct ProxyConfig {
 	url: Url,
