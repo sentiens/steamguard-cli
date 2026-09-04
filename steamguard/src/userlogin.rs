@@ -17,7 +17,7 @@ use crate::refresher::TokenRefresher;
 use crate::steamapi::authentication::AuthenticationClient;
 use crate::steamapi::EResult;
 use crate::token::Tokens;
-use crate::transport::{Transport, TransportError};
+use crate::transport::{NetworkError, Transport, TransportError};
 use anyhow::Context;
 use base64::Engine;
 use log::*;
@@ -32,7 +32,7 @@ pub enum LoginError {
 	UnknownEResult(EResult),
 	AuthAlreadyStarted,
 	TransportError(TransportError),
-	NetworkFailure(reqwest::Error),
+	NetworkFailure(NetworkError),
 	OtherFailure(anyhow::Error),
 }
 
@@ -50,9 +50,15 @@ impl From<TransportError> for LoginError {
 	}
 }
 
+impl From<NetworkError> for LoginError {
+	fn from(err: NetworkError) -> Self {
+		LoginError::NetworkFailure(err)
+	}
+}
+
 impl From<reqwest::Error> for LoginError {
 	fn from(err: reqwest::Error) -> Self {
-		LoginError::NetworkFailure(err)
+		LoginError::NetworkFailure(err.into())
 	}
 }
 
@@ -430,7 +436,7 @@ pub enum UpdateAuthSessionError {
 	DuplicateRequest,
 	UnknownEResult(EResult),
 	TransportError(TransportError),
-	NetworkFailure(reqwest::Error),
+	NetworkFailure(NetworkError),
 	OtherFailure(anyhow::Error),
 }
 
@@ -460,9 +466,15 @@ impl From<TransportError> for UpdateAuthSessionError {
 	}
 }
 
+impl From<NetworkError> for UpdateAuthSessionError {
+	fn from(err: NetworkError) -> Self {
+		UpdateAuthSessionError::NetworkFailure(err)
+	}
+}
+
 impl From<reqwest::Error> for UpdateAuthSessionError {
 	fn from(err: reqwest::Error) -> Self {
-		UpdateAuthSessionError::NetworkFailure(err)
+		UpdateAuthSessionError::NetworkFailure(err.into())
 	}
 }
 

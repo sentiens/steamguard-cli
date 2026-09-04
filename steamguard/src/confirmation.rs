@@ -14,7 +14,7 @@ use sha1::Sha1;
 
 use crate::{
 	steamapi::{self},
-	transport::Transport,
+	transport::{NetworkError, Transport},
 	SteamGuardAccount,
 };
 
@@ -101,10 +101,12 @@ where
 			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
 			.header("Accept-Language", ACCEPT_LANGUAGE)
 			.query(&self.get_confirmation_query_params("conf", time))
-			.send()?;
+			.send()
+			.map_err(NetworkError::from)?;
 
 		trace!("Confirmation list response status: {}", resp.status());
-		let text = resp.text().unwrap();
+		let resp = NetworkError::ensure_success(resp)?;
+		let text = resp.text().map_err(NetworkError::from)?;
 		debug!("Confirmation list response length: {} bytes", text.len());
 
 		let mut deser = serde_json::Deserializer::from_str(text.as_str());
@@ -156,14 +158,16 @@ where
 			.header("Accept-Language", ACCEPT_LANGUAGE)
 			.header("Origin", "https://steamcommunity.com")
 			.query(&query_params)
-			.send()?;
+			.send()
+			.map_err(NetworkError::from)?;
 
 		debug!(
 			"send_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
-		let raw = resp.text()?;
+		let resp = NetworkError::ensure_success(resp)?;
+		let raw = resp.text().map_err(NetworkError::from)?;
 		trace!(
 			"send_confirmation_ajax() response body length: {} bytes",
 			raw.len()
@@ -252,14 +256,16 @@ where
 			.header("Origin", "https://steamcommunity.com")
 			.header("Accept-Language", ACCEPT_LANGUAGE)
 			.body(query_params)
-			.send()?;
+			.send()
+			.map_err(NetworkError::from)?;
 
 		debug!(
 			"send_multi_confirmation_ajax() response status code: {}",
 			&resp.status()
 		);
 
-		let raw = resp.text()?;
+		let resp = NetworkError::ensure_success(resp)?;
+		let raw = resp.text().map_err(NetworkError::from)?;
 		trace!(
 			"send_multi_confirmation_ajax() response body length: {} bytes",
 			raw.len()
@@ -368,9 +374,11 @@ where
 			.header(COOKIE, cookies.cookies(&STEAM_COOKIE_URL).unwrap())
 			.header("Accept-Language", ACCEPT_LANGUAGE)
 			.query(&query_params)
-			.send()?;
+			.send()
+			.map_err(NetworkError::from)?;
 
-		let text = resp.text()?;
+		let resp = NetworkError::ensure_success(resp)?;
+		let text = resp.text().map_err(NetworkError::from)?;
 		let mut deser = serde_json::Deserializer::from_str(text.as_str());
 		let body: ConfirmationDetailsResponse = serde_path_to_error::deserialize(&mut deser)?;
 
@@ -399,7 +407,7 @@ pub enum ConfirmerError {
 	#[error("Invalid tokens, login or token refresh required.")]
 	InvalidTokens,
 	#[error("Network failure: {0}")]
-	NetworkFailure(#[from] reqwest::Error),
+	NetworkFailure(#[from] NetworkError),
 	#[error("Failed to deserialize response: {0}")]
 	DeserializeError(#[from] serde_path_to_error::Error<serde_json::Error>),
 	#[error("Remote failure: Valve's server responded with a failure and did not elaborate any further. This is likely not a steamguard-cli bug, Steam's confirmation API is just unreliable. Wait a bit and try again.")]
@@ -408,6 +416,12 @@ pub enum ConfirmerError {
 	RemoteFailureWithMessage(String),
 	#[error("Unknown error: {0}")]
 	Unknown(#[from] anyhow::Error),
+}
+
+impl From<reqwest::Error> for ConfirmerError {
+	fn from(error: reqwest::Error) -> Self {
+		Self::NetworkFailure(error.into())
+	}
 }
 
 /// A mobile confirmation. There are multiple things that can be confirmed, like trade offers.

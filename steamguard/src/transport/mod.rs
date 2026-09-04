@@ -1,6 +1,8 @@
+mod network_error;
 mod proxy;
 pub mod webapi;
 
+pub use network_error::{NetworkError, NetworkErrorKind};
 use protobuf::MessageFull;
 pub use proxy::{ProxyConfig, ProxyConfigError, ProxyTransportError};
 pub use webapi::WebApiTransport;
@@ -33,7 +35,13 @@ pub enum TransportError {
 	#[error("Unauthorized: Access token is missing or invalid")]
 	Unauthorized,
 	#[error("NetworkFailure: Transport failed to make request: {0}")]
-	NetworkFailure(#[from] reqwest::Error),
+	NetworkFailure(#[from] NetworkError),
 	#[error("Unexpected error when transport was making request: {0}")]
 	Unknown(#[from] anyhow::Error),
+}
+
+impl From<reqwest::Error> for TransportError {
+	fn from(error: reqwest::Error) -> Self {
+		Self::NetworkFailure(error.into())
+	}
 }

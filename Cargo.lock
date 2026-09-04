@@ -3561,6 +3561,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rsa",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",

@@ -4,7 +4,7 @@ use log::{debug, trace};
 use protobuf::MessageFull;
 use reqwest::blocking::multipart::Form;
 
-use super::{ProxyConfig, ProxyTransportError, Transport, TransportError};
+use super::{NetworkError, ProxyConfig, ProxyTransportError, Transport, TransportError};
 use crate::steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult};
 
 #[derive(Clone)]
@@ -83,9 +83,13 @@ impl Transport for WebApiTransport {
 			req.multipart(form)
 		};
 
-		let resp = req.send()?;
+		let resp = req.send().map_err(NetworkError::from)?;
 		let status = resp.status();
 		debug!("Response HTTP status: {}", status);
+		if status == reqwest::StatusCode::UNAUTHORIZED {
+			return Err(TransportError::Unauthorized);
+		}
+		let resp = NetworkError::ensure_success(resp)?;
 
 		let eresult = if let Some(eresult) = resp.headers().get("x-eresult") {
 			let s = eresult
@@ -117,14 +121,7 @@ impl Transport for WebApiTransport {
 			None
 		};
 
-		let bytes = resp.bytes()?;
-		if !status.is_success() {
-			trace!("Error response body length: {} bytes", bytes.len());
-
-			if status == reqwest::StatusCode::UNAUTHORIZED {
-				return Err(TransportError::Unauthorized);
-			}
-		}
+		let bytes = resp.bytes().map_err(NetworkError::from)?;
 
 		let res = decode_msg::<Res>(bytes.as_ref())?;
 		let api_resp = ApiResponse {
