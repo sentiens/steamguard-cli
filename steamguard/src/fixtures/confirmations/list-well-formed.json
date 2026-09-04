@@ -1,0 +1,21 @@
+{
+	"success": true,
+	"conf": [
+		{
+			"type": 2,
+			"type_name": "Trade",
+			"id": "10000000001",
+			"creator_id": "20000000002",
+			"nonce": "30000000003",
+			"creation_time": 1700000000,
+			"cancel": "Cancel",
+			"accept": "Accept",
+			"icon": null,
+			"multi": false,
+			"headline": "Trade confirmation",
+			"summary": [
+				"Synthetic fixture"
+			]
+		}
+	]
+}

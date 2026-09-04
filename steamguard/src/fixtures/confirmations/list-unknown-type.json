@@ -1,0 +1,19 @@
+{
+	"success": true,
+	"conf": [
+		{
+			"type": 987654,
+			"type_name": "Unknown",
+			"id": "40000000004",
+			"creator_id": "50000000005",
+			"nonce": "60000000006",
+			"creation_time": 1700000001,
+			"cancel": "Cancel",
+			"accept": "Accept",
+			"icon": null,
+			"multi": false,
+			"headline": "Unknown confirmation",
+			"summary": []
+		}
+	]
+}

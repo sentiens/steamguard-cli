@@ -5,7 +5,7 @@ use hmac::{Hmac, Mac};
 use log::*;
 use reqwest::{cookie::CookieStore, header::HeaderValue};
 use secrecy::ExposeSecret;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha1::Sha1;
 
 use crate::{
@@ -507,15 +507,39 @@ pub enum ConfirmationType {
 	Unknown(u32),
 }
 
-#[derive(Deserialize)]
 pub struct ConfirmationListResponse {
 	pub success: bool,
-	#[serde(default)]
 	pub needauth: Option<bool>,
-	#[serde(default)]
 	pub conf: Vec<Confirmation>,
-	#[serde(default)]
 	pub message: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ConfirmationListResponse {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		#[derive(Deserialize)]
+		struct Response {
+			success: bool,
+			needauth: Option<bool>,
+			conf: Option<Vec<Confirmation>>,
+			message: Option<String>,
+		}
+
+		let response = Response::deserialize(deserializer)?;
+		let conf = match response.conf {
+			Some(conf) => conf,
+			None if response.success => return Err(serde::de::Error::missing_field("conf")),
+			None => Vec::new(),
+		};
+		Ok(Self {
+			success: response.success,
+			needauth: response.needauth,
+			conf,
+			message: response.message,
+		})
+	}
 }
 
 impl fmt::Debug for ConfirmationListResponse {
@@ -568,6 +592,8 @@ fn generate_confirmation_hash_for_time(
 
 #[cfg(test)]
 mod tests {
+	use anyhow::Context;
+
 	use super::*;
 
 	#[test]
@@ -614,6 +640,45 @@ mod tests {
 			assert_eq!(confirmations.needauth, Some(true));
 		}
 
+		Ok(())
+	}
+
+	#[test]
+	fn parses_a_complete_confirmation_list_fixture() -> anyhow::Result<()> {
+		let response: ConfirmationListResponse =
+			serde_json::from_str(include_str!("fixtures/confirmations/list-well-formed.json"))?;
+		let confirmation = response
+			.conf
+			.first()
+			.context("well-formed fixture should contain a confirmation")?;
+
+		assert!(response.success);
+		assert_eq!(response.conf.len(), 1);
+		assert_eq!(confirmation.conf_type, ConfirmationType::Trade);
+		Ok(())
+	}
+
+	#[test]
+	fn rejects_a_truncated_confirmation_list_fixture() {
+		let error = serde_json::from_str::<ConfirmationListResponse>(include_str!(
+			"fixtures/confirmations/list-truncated.json"
+		))
+		.unwrap_err();
+
+		assert!(error.to_string().contains("missing field `conf`"));
+	}
+
+	#[test]
+	fn preserves_unknown_confirmation_types() -> anyhow::Result<()> {
+		let response: ConfirmationListResponse = serde_json::from_str(include_str!(
+			"fixtures/confirmations/list-unknown-type.json"
+		))?;
+		let confirmation = response
+			.conf
+			.first()
+			.context("unknown-type fixture should contain a confirmation")?;
+
+		assert_eq!(confirmation.conf_type, ConfirmationType::Unknown(987_654));
 		Ok(())
 	}
 
