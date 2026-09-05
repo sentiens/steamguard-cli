@@ -42,8 +42,8 @@ pub struct ApiRequest<'a, T> {
 impl<T> fmt::Debug for ApiRequest<'_, T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("ApiRequest")
-			.field("api_interface", &self.api_interface)
-			.field("api_method", &self.api_method)
+			.field("api_interface", &"[REDACTED]")
+			.field("api_method", &"[REDACTED]")
 			.field("api_version", &self.api_version)
 			.field(
 				"access_token",

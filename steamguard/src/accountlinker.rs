@@ -14,7 +14,6 @@ use anyhow::Context;
 use base64::Engine;
 use thiserror::Error;
 
-#[derive(Debug)]
 pub struct AccountLinker<T>
 where
 	T: Transport,
@@ -24,6 +23,18 @@ where
 	pub finalized: bool,
 	tokens: Tokens,
 	client: TwoFactorClient<T>,
+}
+
+impl<T: Transport> std::fmt::Debug for AccountLinker<T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AccountLinker")
+			.field("device_id", &"[REDACTED]")
+			.field("account", &self.account.as_ref().map(|_| "[REDACTED]"))
+			.field("finalized", &self.finalized)
+			.field("tokens", &"[REDACTED]")
+			.field("client", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl<T> AccountLinker<T>
@@ -243,12 +254,22 @@ where
 	}
 }
 
-#[derive(Debug)]
 pub struct AccountLinkSuccess {
 	account: SteamGuardAccount,
 	server_time: u64,
 	phone_number_hint: String,
 	confirm_type: AccountLinkConfirmType,
+}
+
+impl std::fmt::Debug for AccountLinkSuccess {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("AccountLinkSuccess")
+			.field("account", &"[REDACTED]")
+			.field("server_time", &self.server_time)
+			.field("phone_number_hint", &"[REDACTED]")
+			.field("confirm_type", &self.confirm_type)
+			.finish()
+	}
 }
 
 impl AccountLinkSuccess {
@@ -417,6 +438,25 @@ impl From<EResult> for TransferError {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn link_response_debug_redacts_phone_hint_and_account() {
+		let success = AccountLinkSuccess {
+			account: SteamGuardAccount {
+				account_name: "account-canary".into(),
+				..Default::default()
+			},
+			server_time: 123,
+			phone_number_hint: "+1 *** *** 0182".into(),
+			confirm_type: AccountLinkConfirmType::SMS,
+		};
+		assert_eq!(success.phone_number_hint(), "+1 *** *** 0182");
+		assert_eq!(success.account().account_name, "account-canary");
+		let debug = format!("{success:?}");
+		assert!(!debug.contains("0182"));
+		assert!(!debug.contains("account-canary"));
+		assert!(debug.contains("[REDACTED]"));
+	}
 
 	#[test]
 	fn truncated_transfer_response_returns_an_error() {

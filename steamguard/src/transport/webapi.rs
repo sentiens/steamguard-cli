@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, io::Read, time::Duration};
 
 use log::{debug, trace};
 use protobuf::MessageFull;
@@ -17,6 +17,7 @@ use crate::{
 #[derive(Clone)]
 pub struct WebApiTransport {
 	client: reqwest::blocking::Client,
+	bounded_responses: bool,
 }
 
 impl fmt::Debug for WebApiTransport {
@@ -29,7 +30,10 @@ impl fmt::Debug for WebApiTransport {
 
 impl WebApiTransport {
 	pub fn new(client: reqwest::blocking::Client) -> Self {
-		Self { client }
+		Self {
+			client,
+			bounded_responses: false,
+		}
 	}
 
 	/// Creates a transport whose requests are routed through `proxy`.
@@ -40,10 +44,27 @@ impl WebApiTransport {
 	pub fn new_with_proxy(proxy: &ProxyConfig) -> Result<Self, ProxyTransportError> {
 		let proxy = proxy.to_reqwest_proxy()?;
 		let client = reqwest::blocking::Client::builder()
+			.no_proxy()
 			.proxy(proxy)
+			.use_rustls_tls()
+			.tls_built_in_root_certs(false)
+			.tls_built_in_webpki_certs(true)
+			.redirect(reqwest::redirect::Policy::none())
+			.retry(reqwest::retry::never())
+			.connect_timeout(Duration::from_secs(10))
+			.timeout(Duration::from_secs(30))
+			.cookie_store(false)
+			// Read compressed bytes within a budget before decoding them ourselves.
+			.no_gzip()
+			.no_brotli()
+			.no_zstd()
+			.no_deflate()
 			.build()
 			.map_err(|_| ProxyTransportError::ClientBuild)?;
-		Ok(Self::new(client))
+		Ok(Self {
+			client,
+			bounded_responses: true,
+		})
 	}
 }
 
@@ -80,13 +101,101 @@ pub(crate) fn send_web(
 	client: &reqwest::blocking::Client,
 	request: WebRequest<'_>,
 ) -> Result<WebResponse, NetworkError> {
+	send_web_with_limits(client, request, false)
+}
+
+fn send_web_with_limits(
+	client: &reqwest::blocking::Client,
+	request: WebRequest<'_>,
+	bounded: bool,
+) -> Result<WebResponse, NetworkError> {
 	let endpoint = request.endpoint.name();
 	let response = build_web_request(client, request)?.send()?;
 	let status = response.status().as_u16();
 	debug!("Web request completed: endpoint={endpoint}, status={status}");
+	if bounded {
+		check_headers(&response)?;
+	}
 	let response = NetworkError::ensure_success(response)?;
-	let body = response.text()?;
+	let body = if bounded {
+		let status = response.status();
+		String::from_utf8(read_response(response)?)
+			.map_err(|_| NetworkError::response_body(status, None))?
+	} else {
+		response.text()?
+	};
 	Ok(WebResponse { status, body })
+}
+
+const MAX_RAW_BODY: usize = 8 * 1024 * 1024;
+const MAX_DECODED_BODY: usize = 16 * 1024 * 1024;
+const MAX_HEADERS: usize = 64 * 1024;
+
+fn read_bounded(
+	mut reader: impl Read,
+	limit: usize,
+	status: reqwest::StatusCode,
+) -> Result<Vec<u8>, NetworkError> {
+	let mut bytes = Vec::new();
+	let mut chunk = [0; 8192];
+	loop {
+		// One extra byte distinguishes exact-limit EOF from a response that must be rejected.
+		let available = chunk.len().min(limit - bytes.len() + 1);
+		let count = reader
+			.read(&mut chunk[..available])
+			.map_err(|error| NetworkError::response_body(status, Some(error)))?;
+		if count == 0 {
+			return Ok(bytes);
+		}
+		if count > limit - bytes.len() {
+			return Err(NetworkError::response_body(status, None));
+		}
+		bytes.extend_from_slice(&chunk[..count]);
+	}
+}
+
+fn check_headers(response: &reqwest::blocking::Response) -> Result<(), NetworkError> {
+	let status = response.status();
+	// reqwest has already parsed headers here; this bounds accepted data, not its parser allocation.
+	let mut header_bytes = 2usize;
+	for (name, value) in response.headers() {
+		header_bytes = header_bytes
+			.saturating_add(name.as_str().len())
+			.saturating_add(value.as_bytes().len())
+			.saturating_add(4);
+		if header_bytes > MAX_HEADERS {
+			return Err(NetworkError::response_body(status, None));
+		}
+	}
+	Ok(())
+}
+
+fn read_response(response: reqwest::blocking::Response) -> Result<Vec<u8>, NetworkError> {
+	use reqwest::header::CONTENT_ENCODING;
+	let status = response.status();
+	if response
+		.content_length()
+		.is_some_and(|length| length > MAX_RAW_BODY as u64)
+	{
+		return Err(NetworkError::response_body(status, None));
+	}
+	let mut encodings = response.headers().get_all(CONTENT_ENCODING).iter();
+	let gzip = match (encodings.next(), encodings.next()) {
+		(None, None) => false,
+		(Some(value), None) if value.as_bytes().eq_ignore_ascii_case(b"identity") => false,
+		(Some(value), None) if value.as_bytes().eq_ignore_ascii_case(b"gzip") => true,
+		_ => return Err(NetworkError::response_body(status, None)),
+	};
+	let bytes = read_bounded(response, MAX_RAW_BODY, status)?;
+	if gzip {
+		read_bounded(
+			flate2::read::MultiGzDecoder::new(bytes.as_slice()),
+			MAX_DECODED_BODY,
+			status,
+		)
+	} else {
+		Ok(bytes)
+	}
 }
 
 impl Transport for WebApiTransport {
@@ -106,7 +215,7 @@ impl Transport for WebApiTransport {
 		}
 
 		let url = apireq.build_url();
-		debug!("HTTP Request: {} {}", Req::method(), url);
+		debug!("HTTP Request method: {}", Req::method());
 		trace!("HTTP request metadata: {apireq:#?}");
 		let mut req = self.client.request(Req::method(), &url);
 
@@ -135,8 +244,11 @@ impl Transport for WebApiTransport {
 		let resp = req.send().map_err(NetworkError::from)?;
 		let status = resp.status();
 		debug!("Response HTTP status: {}", status);
-		if status == reqwest::StatusCode::UNAUTHORIZED {
-			return Err(TransportError::Unauthorized);
+		if self.bounded_responses {
+			check_headers(&resp)?;
+		}
+		if !status.is_success() {
+			return Err(NetworkError::http_status(&resp).into());
 		}
 		let resp = NetworkError::ensure_success(resp)?;
 
@@ -147,7 +259,6 @@ impl Transport for WebApiTransport {
 					header: "x-eresult".to_owned(),
 					source: err.into(),
 				})?;
-			debug!("HTTP Header x-eresult: {}", s);
 			s.parse::<i32>()
 				.map_err(|err| TransportError::HeaderParseFailure {
 					header: "x-eresult".to_owned(),
@@ -170,9 +281,11 @@ impl Transport for WebApiTransport {
 			None
 		};
 
-		let bytes = resp.bytes().map_err(NetworkError::from)?;
-
-		let res = decode_msg::<Res>(bytes.as_ref())?;
+		let res = if self.bounded_responses {
+			decode_msg::<Res>(&read_response(resp)?)?
+		} else {
+			decode_msg::<Res>(&resp.bytes().map_err(NetworkError::from)?)?
+		};
 		let api_resp = ApiResponse {
 			result: eresult,
 			error_message: error_msg,
@@ -184,7 +297,7 @@ impl Transport for WebApiTransport {
 	}
 
 	fn send_web(&self, request: WebRequest<'_>) -> Result<WebResponse, NetworkError> {
-		send_web(&self.client, request)
+		send_web_with_limits(&self.client, request, self.bounded_responses)
 	}
 
 	fn close(&mut self) {}
@@ -608,7 +721,7 @@ mod tests {
 
 		let proxy = ProxyConfig::new(format!("socks5h://{proxy_address}"))
 			.unwrap()
-			.with_basic_auth("socks-user-canary", "socks-password-canary");
+			.with_basic_auth("socks-user-%40-canary", "socks:password-%40-canary");
 		let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
 		let error = transport
 			.innner_http_client()
@@ -618,11 +731,11 @@ mod tests {
 			.unwrap_err();
 
 		let output = format!("{error:?} {error}");
-		assert!(!output.contains("socks-user-canary"));
-		assert!(!output.contains("socks-password-canary"));
+		assert!(!output.contains("socks-user-%40-canary"));
+		assert!(!output.contains("socks:password-%40-canary"));
 		let (username, password, domain, port) = server.join().unwrap();
-		assert_eq!(username, "socks-user-canary");
-		assert_eq!(password, "socks-password-canary");
+		assert_eq!(username, "socks-user-%40-canary");
+		assert_eq!(password, "socks:password-%40-canary");
 		assert_eq!(domain, "remote-name.invalid");
 		assert_eq!(port, 8080);
 	}

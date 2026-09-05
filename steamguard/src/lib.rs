@@ -172,6 +172,8 @@ mod tests {
 			"secret-one-canary",
 			"access-token-canary",
 			"refresh-token-canary",
+			"[42, 42, 42",
+			"KioqKioqKioqKioqKioqKioqKio=",
 		] {
 			assert!(!output.contains(canary));
 		}

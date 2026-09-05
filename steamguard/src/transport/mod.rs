@@ -2,7 +2,10 @@ mod network_error;
 mod proxy;
 pub mod webapi;
 
-pub use network_error::{NetworkError, NetworkErrorKind};
+#[cfg(test)]
+mod tests;
+
+pub use network_error::{NetworkError, NetworkErrorKind, RequestSent};
 use protobuf::MessageFull;
 pub use proxy::{ProxyConfig, ProxyConfigError, ProxyTransportError};
 pub use webapi::{WebApiTransport, WebEndpoint, WebRequest, WebResponse};
@@ -29,7 +32,7 @@ pub trait Transport {
 	}
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum TransportError {
 	#[error("Transport failed to parse response headers")]
 	HeaderParseFailure {
@@ -43,8 +46,20 @@ pub enum TransportError {
 	Unauthorized,
 	#[error("NetworkFailure: Transport failed to make request: {0}")]
 	NetworkFailure(#[from] NetworkError),
-	#[error("Unexpected error when transport was making request: {0}")]
+	#[error("Unexpected error when transport was making request")]
 	Unknown(#[from] anyhow::Error),
+}
+
+impl std::fmt::Debug for TransportError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::NetworkFailure(error) => f.debug_tuple("NetworkFailure").field(error).finish(),
+			Self::HeaderParseFailure { .. } => f.write_str("HeaderParseFailure([REDACTED])"),
+			Self::ProtobufError(_) => f.write_str("ProtobufError([REDACTED])"),
+			Self::Unauthorized => f.write_str("Unauthorized"),
+			Self::Unknown(_) => f.write_str("Unknown([REDACTED])"),
+		}
+	}
 }
 
 impl From<reqwest::Error> for TransportError {

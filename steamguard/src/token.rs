@@ -34,19 +34,18 @@ impl TwoFactorSecret {
 
 	/// Creates a two-factor secret after validating its length.
 	pub fn try_from_bytes(bytes: Vec<u8>) -> anyhow::Result<Self> {
-		let bytes: [u8; 20] = bytes
-			.try_into()
-			.map_err(|_| anyhow::anyhow!("two-factor secret must contain exactly 20 bytes"))?;
+		let length = bytes.len();
+		let bytes: [u8; 20] = bytes.try_into().map_err(|_| {
+			anyhow::anyhow!("two-factor secret must contain exactly 20 bytes; got {length}")
+		})?;
 		Ok(Self(bytes.into()))
 	}
 
 	pub fn parse_shared_secret(secret: String) -> anyhow::Result<Self> {
-		ensure!(!secret.is_empty(), "unable to parse empty shared secret");
-		let result: [u8; 20] = base64::engine::general_purpose::STANDARD
-			.decode(secret)?
-			.try_into()
-			.map_err(|_| anyhow::anyhow!("shared secret must decode to exactly 20 bytes"))?;
-		Ok(Self(result.into()))
+		let bytes = base64::engine::general_purpose::STANDARD
+			.decode(secret)
+			.map_err(|_| anyhow::anyhow!("shared secret is not valid base64"))?;
+		Self::try_from_bytes(bytes)
 	}
 
 	/// Generates a 5 character 2FA code for the supplied Unix timestamp.
@@ -200,9 +199,12 @@ fn decode_jwt(jwt: impl AsRef<str>) -> anyhow::Result<SteamJwtData> {
 		!header.is_empty() && !data.is_empty() && !signature.is_empty(),
 		"Invalid JWT"
 	);
-	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(data)?;
-	let json = String::from_utf8(bytes)?;
-	let jwt_data: SteamJwtData = serde_json::from_str(&json)?;
+	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+		.decode(data)
+		.map_err(|_| anyhow::anyhow!("JWT payload is not valid base64url"))?;
+	// JSON/UTF-8 errors can include input strings or byte dumps. Do not retain those sources.
+	let jwt_data: SteamJwtData = serde_json::from_slice(&bytes)
+		.map_err(|_| anyhow::anyhow!("JWT payload is not valid claim data"))?;
 	jwt_data
 		.try_steam_id()
 		.context("JWT subject is not a valid Steam ID")?;
@@ -224,8 +226,8 @@ pub struct SteamJwtData {
 impl fmt::Debug for SteamJwtData {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("SteamJwtData")
-			.field("exp", &self.exp)
-			.field("iat", &self.iat)
+			.field("exp", &"[REDACTED]")
+			.field("iat", &"[REDACTED]")
 			.field("iss", &"[REDACTED]")
 			.field("aud", &"[REDACTED]")
 			.field("sub", &"[REDACTED]")
@@ -313,6 +315,66 @@ mod tests {
 	}
 
 	#[test]
+	fn malformed_token_is_an_error_not_a_panic() {
+		let encode = |payload: &[u8]| {
+			format!(
+				"header.{}.signature",
+				base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+			)
+		};
+		let mut inputs: Vec<String> = [
+			"",
+			"header",
+			"header.payload",
+			".payload.signature",
+			"header..signature",
+			"header.payload.",
+			"a.b.c.d",
+			"header.%!.signature",
+		]
+		.into_iter()
+		.map(str::to_owned)
+		.collect();
+		inputs.extend([
+			encode(b"\xffutf8-secret-canary"),
+			encode(b"{\"secret-canary\":"),
+			encode(
+				br#"{"exp":"json-secret-canary","iat":1,"iss":"s","aud":[],"sub":"1","jti":"j"}"#,
+			),
+			encode(
+				br#"{"exp":1,"iat":1,"iss":"s","aud":[],"sub":"18446744073709551616","jti":"j"}"#,
+			),
+		]);
+		for input in inputs {
+			let result = std::panic::catch_unwind(|| Jwt::from(input).decode());
+			let error = result.expect("fallible JWT decoding panicked").unwrap_err();
+			let diagnostic = format!("{error} {error:?} {error:#}");
+			assert!(!diagnostic.contains("secret-canary"), "JWT input leaked");
+			assert!(!diagnostic.contains("[255,"), "JWT byte dump leaked");
+		}
+	}
+
+	#[test]
+	fn shared_secret_length_is_checked() {
+		for len in [0, 1, 19, 21, 40] {
+			let error = TwoFactorSecret::try_from_bytes(vec![42; len]).unwrap_err();
+			assert!(error.to_string().contains(&format!("got {len}")));
+			let encoded = base64::engine::general_purpose::STANDARD.encode(vec![42; len]);
+			let error = TwoFactorSecret::parse_shared_secret(encoded.clone()).unwrap_err();
+			assert!(error.to_string().contains(&format!("got {len}")));
+			if !encoded.is_empty() {
+				assert!(!format!("{error:?}").contains(&encoded));
+			}
+		}
+		assert_eq!(
+			TwoFactorSecret::try_from_bytes(vec![42; 20])
+				.unwrap()
+				.expose_secret(),
+			&[42; 20]
+		);
+	}
+
+	#[test]
 	fn debug_output_redacts_secrets_tokens_and_jwt_data() {
 		let raw_secret = b"two-factor-canary!!!".to_vec();
 		let raw_secret_debug = format!("{raw_secret:?}");
@@ -323,8 +385,8 @@ mod tests {
 		);
 		let jwt = Jwt::from("raw-jwt-canary".to_owned());
 		let jwt_data = SteamJwtData {
-			exp: 1,
-			iat: 2,
+			exp: 8765432109,
+			iat: 7654321098,
 			iss: "issuer-canary".to_owned(),
 			aud: vec!["audience-canary".to_owned()],
 			sub: "subject-canary".to_owned(),
@@ -341,6 +403,8 @@ mod tests {
 			"audience-canary",
 			"subject-canary",
 			"identifier-canary",
+			"8765432109",
+			"7654321098",
 		] {
 			assert!(!output.contains(canary));
 		}

@@ -3548,6 +3548,7 @@ dependencies = [
  "anyhow",
  "base64",
  "cookie",
+ "flate2",
  "hmac",
  "lazy_static",
  "log",

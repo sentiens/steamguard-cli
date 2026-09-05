@@ -131,10 +131,18 @@ impl From<EResult> for SetPhoneNumberError {
 	}
 }
 
-#[derive(Debug)]
 pub struct SetAccountPhoneNumberResponse {
 	confirmation_email_address: String,
 	phone_number_formatted: String,
+}
+
+impl std::fmt::Debug for SetAccountPhoneNumberResponse {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("SetAccountPhoneNumberResponse")
+			.field("confirmation_email_address", &"[REDACTED]")
+			.field("phone_number_formatted", &"[REDACTED]")
+			.finish()
+	}
 }
 
 impl SetAccountPhoneNumberResponse {
@@ -167,5 +175,27 @@ pub enum VerifyPhoneError {
 impl From<EResult> for VerifyPhoneError {
 	fn from(result: EResult) -> Self {
 		VerifyPhoneError::UnknownEResult(result)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn phone_response_debug_has_no_personal_data() {
+		let mut response = CPhone_SetAccountPhoneNumber_Response::new();
+		response.set_confirmation_email_address("email-canary@example.invalid".into());
+		response.set_phone_number_formatted("+1 202 555 0182".into());
+		let response = SetAccountPhoneNumberResponse::from(response);
+		assert_eq!(
+			response.confirmation_email_address(),
+			"email-canary@example.invalid"
+		);
+		assert_eq!(response.phone_number_formatted(), "+1 202 555 0182");
+		let debug = format!("{response:?} {response:#?}");
+		assert!(!debug.contains("email-canary"));
+		assert!(!debug.contains("555 0182"));
+		assert!(debug.contains("[REDACTED]"));
 	}
 }
