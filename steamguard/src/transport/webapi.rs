@@ -231,6 +231,7 @@ impl WebEndpoint<'_> {
 					.map_err(|_| NetworkError::invalid_request())?;
 				url.path_segments_mut()
 					.map_err(|_| NetworkError::invalid_request())?
+					.pop_if_empty()
 					.push(id);
 				Ok(url)
 			}
@@ -468,6 +469,38 @@ mod tests {
 			post.body().unwrap().as_bytes(),
 			Some(b"key=value".as_slice())
 		);
+	}
+
+	#[test]
+	fn builds_confirmation_details_requests_with_safe_paths() {
+		let client = reqwest::blocking::Client::builder()
+			.no_proxy()
+			.build()
+			.unwrap();
+		let query = [("key", Cow::Borrowed("value"))];
+		for (id, expected_path) in [
+			("123", "/mobileconf/details/123"),
+			("../123/45%?#", "/mobileconf/details/..%2F123%2F45%25%3F%23"),
+		] {
+			let request = build_web_request(
+				&client,
+				WebRequest::new(
+					WebEndpoint::ConfirmationDetails(id),
+					&query,
+					"test-agent",
+					"session=test-cookie",
+					"en-US",
+				),
+			)
+			.unwrap()
+			.build()
+			.unwrap();
+
+			assert_eq!(request.method(), reqwest::Method::GET);
+			assert_eq!(request.url().path(), expected_path);
+			assert_eq!(request.url().query(), Some("key=value"));
+			assert_eq!(request.url().fragment(), None);
+		}
 	}
 
 	#[test]
