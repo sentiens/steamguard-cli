@@ -34,6 +34,10 @@ fn derived_debug_is_absent_where_secrets_live() {
 			&["NetworkError"][..],
 		),
 		(
+			include_str!("../src/transport/mod.rs"),
+			&["TransportError"][..],
+		),
+		(
 			include_str!("../src/transport/webapi.rs"),
 			&["WebApiTransport", "WebRequest", "WebResponse"][..],
 		),
@@ -43,7 +47,7 @@ fn derived_debug_is_absent_where_secrets_live() {
 		),
 		(
 			include_str!("../src/accountlinker.rs"),
-			&["AccountLinker", "AccountLinkSuccess"][..],
+			&["AccountLinker", "AccountLinkSuccess", "AccountLinkError"][..],
 		),
 		(
 			include_str!("../src/phonelinker.rs"),
@@ -52,7 +56,13 @@ fn derived_debug_is_absent_where_secrets_live() {
 		(include_str!("../src/refresher.rs"), &["TokenRefresher"][..]),
 		(
 			include_str!("../src/userlogin.rs"),
-			&["BeginQrLoginResponse", "UserLogin", "StartAuth"][..],
+			&[
+				"BeginQrLoginResponse",
+				"UserLogin",
+				"StartAuth",
+				"LoginError",
+				"UpdateAuthSessionError",
+			][..],
 		),
 		(
 			include_str!("../src/confirmation.rs"),
@@ -61,6 +71,7 @@ fn derived_debug_is_absent_where_secrets_live() {
 				"ConfirmationId",
 				"ConfirmationListResponse",
 				"SendConfirmationResponse",
+				"ConfirmerError",
 			][..],
 		),
 		(

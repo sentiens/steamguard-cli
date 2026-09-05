@@ -45,7 +45,8 @@ impl NetworkError {
 	fn new(source: reqwest::Error, retry_after: Option<HeaderValue>) -> Self {
 		let kind = classify(&source);
 		let status = source.status();
-		let sent = if source.is_builder() || source.is_connect() {
+		// A generic client may already have sent a request before a redirected connection fails.
+		let sent = if source.is_builder() {
 			RequestSent::No
 		} else if status.is_some() || source.is_decode() || source.is_redirect() {
 			RequestSent::Yes
@@ -59,6 +60,17 @@ impl NetworkError {
 			sent,
 			source: Some(Box::new(source.without_url())),
 		}
+	}
+
+	pub(crate) fn from_approved_send(source: reqwest::Error) -> Self {
+		// Redirects and reqwest retries are disabled on the approved route. Its connection
+		// failures precede the origin request; generic clients do not provide this proof.
+		let before_request = source.is_connect();
+		let mut error = Self::from(source);
+		if before_request {
+			error.sent = RequestSent::No;
+		}
+		error
 	}
 
 	pub(crate) fn http_status(response: &Response) -> Self {
@@ -254,7 +266,7 @@ mod tests {
 		let error = NetworkError::from(error);
 
 		assert_eq!(error.kind(), NetworkErrorKind::Connection);
-		assert_eq!(error.sent(), RequestSent::No);
+		assert_eq!(error.sent(), RequestSent::Maybe);
 		assert!(error.source().is_some());
 	}
 

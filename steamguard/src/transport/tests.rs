@@ -10,6 +10,9 @@ use std::{
 
 use super::*;
 
+#[cfg(feature = "test-endpoints")]
+mod callers;
+
 pub(super) fn accept(listener: &TcpListener) -> TcpStream {
 	listener.set_nonblocking(true).unwrap();
 	let deadline = Instant::now() + Duration::from_secs(5);
@@ -165,7 +168,13 @@ fn proxied_client_never_redirects_and_never_retries() {
 		write!(stream, "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
 		proxy
 	});
-	let response = web_get(&transport, "http://origin.invalid/start").unwrap();
+	// The raw client returns an unfollowed redirect; approved operations classify its status.
+	let response = transport
+		.innner_http_client()
+		.unwrap()
+		.get("http://origin.invalid/start")
+		.send()
+		.unwrap();
 	assert_eq!(response.status(), 302);
 	assert_eq!(pending_connections(&server.join().unwrap()), 0);
 	assert_eq!(pending_connections(&target), 0);
@@ -231,6 +240,71 @@ fn plain_constructor_is_unchanged() {
 	assert!(request.starts_with("get /end http/1.1"));
 	assert!(request.contains("cookie: saved=caller"));
 	assert!(request.contains("user-agent: caller-selected-agent"));
+}
+
+#[test]
+fn redirect_then_connection_failure_does_not_prove_no_send() {
+	for raw_conversion in [false, true] {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = format!("http://{}/already-sent", listener.local_addr().unwrap());
+		let refused = TcpListener::bind("127.0.0.1:0").unwrap();
+		let destination = refused.local_addr().unwrap();
+		drop(refused);
+		let server = thread::spawn(move || {
+			let mut stream = accept(&listener);
+			let request = read_headers(&mut stream);
+			write!(stream, "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{destination}/next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+			request
+		});
+		let client = reqwest::blocking::Client::builder()
+			.no_proxy()
+			.timeout(Duration::from_secs(2))
+			.build()
+			.unwrap();
+		let error = if raw_conversion {
+			NetworkError::from(client.get(&url).send().unwrap_err())
+		} else {
+			web_get(&WebApiTransport::new(client), &url).unwrap_err()
+		};
+		assert!(server.join().unwrap().starts_with("GET /already-sent "));
+		assert_eq!(error.kind(), NetworkErrorKind::Connection);
+		assert_eq!(error.sent(), RequestSent::Maybe);
+	}
+}
+
+#[test]
+fn approved_connection_refusal_preserves_no_send_proof() {
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let transport = proxied(&listener);
+	drop(listener);
+	let error = web_get(&transport, "http://origin.invalid/refused").unwrap_err();
+	assert_eq!(error.kind(), NetworkErrorKind::Connection);
+	assert_eq!(error.sent(), RequestSent::No);
+	assert!(error.source().unwrap().is::<reqwest::Error>());
+}
+
+#[test]
+fn plain_web_no_follow_preserves_redirect_response() {
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let target = TcpListener::bind("127.0.0.1:0").unwrap();
+	let url = format!("http://{}", listener.local_addr().unwrap());
+	let destination = target.local_addr().unwrap();
+	let server = thread::spawn(move || {
+		let mut stream = accept(&listener);
+		read_headers(&mut stream);
+		write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{destination}/next\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{{\"success\":true}}").unwrap();
+	});
+	let client = reqwest::blocking::Client::builder()
+		.no_proxy()
+		.redirect(reqwest::redirect::Policy::none())
+		.timeout(Duration::from_secs(2))
+		.build()
+		.unwrap();
+	let response = web_get(&WebApiTransport::new(client), &url).unwrap();
+	server.join().unwrap();
+	assert_eq!(response.status(), 302);
+	assert_eq!(response.into_body(), r#"{"success":true}"#);
+	assert_eq!(pending_connections(&target), 0);
 }
 
 // Public synthetic self-signed identity; never used outside loopback tests.

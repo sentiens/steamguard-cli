@@ -401,7 +401,7 @@ impl ConfirmationAction {
 	}
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ConfirmerError {
 	#[error("Invalid tokens, login or token refresh required.")]
 	InvalidTokens,
@@ -409,14 +409,28 @@ pub enum ConfirmerError {
 	InvalidCookieHeader,
 	#[error("Network failure: {0}")]
 	NetworkFailure(#[from] NetworkError),
-	#[error("Failed to deserialize response: {0}")]
+	#[error("Failed to deserialize confirmation response")]
 	DeserializeError(#[from] serde_path_to_error::Error<serde_json::Error>),
 	#[error("Remote failure: Valve's server responded with a failure and did not elaborate any further. This is likely not a steamguard-cli bug, Steam's confirmation API is just unreliable. Wait a bit and try again.")]
 	RemoteFailure,
-	#[error("Remote failure: Valve's server responded with a failure and said: {0}")]
+	#[error("Remote failure: Valve's server rejected the request")]
 	RemoteFailureWithMessage(String),
-	#[error("Unknown error: {0}")]
+	#[error("Unexpected confirmation error")]
 	Unknown(#[from] anyhow::Error),
+}
+
+impl fmt::Debug for ConfirmerError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::NetworkFailure(error) => f.debug_tuple("NetworkFailure").field(error).finish(),
+			Self::DeserializeError(_) => f.write_str("DeserializeError([REDACTED])"),
+			Self::RemoteFailureWithMessage(_) => {
+				f.write_str("RemoteFailureWithMessage([REDACTED])")
+			}
+			Self::Unknown(_) => f.write_str("Unknown([REDACTED])"),
+			_ => fmt::Display::fmt(self, f),
+		}
+	}
 }
 
 impl From<reqwest::Error> for ConfirmerError {

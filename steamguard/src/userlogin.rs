@@ -24,7 +24,6 @@ use log::*;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::{fmt, time::Duration};
 
-#[derive(Debug)]
 pub enum LoginError {
 	BadCredentials,
 	TooManyAttempts,
@@ -36,13 +35,37 @@ pub enum LoginError {
 	OtherFailure(anyhow::Error),
 }
 
+impl fmt::Debug for LoginError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::BadCredentials => f.write_str("BadCredentials"),
+			Self::TooManyAttempts => f.write_str("TooManyAttempts"),
+			Self::SessionExpired => f.write_str("SessionExpired"),
+			Self::AuthAlreadyStarted => f.write_str("AuthAlreadyStarted"),
+			Self::UnknownEResult(result) => f.debug_tuple("UnknownEResult").field(result).finish(),
+			Self::TransportError(error) => f.debug_tuple("TransportError").field(error).finish(),
+			Self::NetworkFailure(error) => f.debug_tuple("NetworkFailure").field(error).finish(),
+			Self::OtherFailure(_) => f.write_str("OtherFailure([REDACTED])"),
+		}
+	}
+}
+
 impl std::fmt::Display for LoginError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
 		write!(f, "{:?}", self)
 	}
 }
 
-impl std::error::Error for LoginError {}
+impl std::error::Error for LoginError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::TransportError(error) => Some(error),
+			Self::NetworkFailure(error) => Some(error),
+			Self::OtherFailure(error) => Some(error.as_ref()),
+			_ => None,
+		}
+	}
+}
 
 impl From<TransportError> for LoginError {
 	fn from(err: TransportError) -> Self {
@@ -432,7 +455,6 @@ impl From<DeviceDetails> for CAuthentication_DeviceDetails {
 	}
 }
 
-#[derive(Debug)]
 pub enum UpdateAuthSessionError {
 	SessionNotStarted,
 	InvalidGuardType,
@@ -447,13 +469,39 @@ pub enum UpdateAuthSessionError {
 	OtherFailure(anyhow::Error),
 }
 
+impl fmt::Debug for UpdateAuthSessionError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::SessionNotStarted => f.write_str("SessionNotStarted"),
+			Self::InvalidGuardType => f.write_str("InvalidGuardType"),
+			Self::TooManyAttempts => f.write_str("TooManyAttempts"),
+			Self::SessionExpired => f.write_str("SessionExpired"),
+			Self::IncorrectSteamGuardCode => f.write_str("IncorrectSteamGuardCode"),
+			Self::DuplicateRequest => f.write_str("DuplicateRequest"),
+			Self::UnknownEResult(result) => f.debug_tuple("UnknownEResult").field(result).finish(),
+			Self::TransportError(error) => f.debug_tuple("TransportError").field(error).finish(),
+			Self::NetworkFailure(error) => f.debug_tuple("NetworkFailure").field(error).finish(),
+			Self::OtherFailure(_) => f.write_str("OtherFailure([REDACTED])"),
+		}
+	}
+}
+
 impl std::fmt::Display for UpdateAuthSessionError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
 		write!(f, "{:?}", self)
 	}
 }
 
-impl std::error::Error for UpdateAuthSessionError {}
+impl std::error::Error for UpdateAuthSessionError {
+	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::TransportError(error) => Some(error),
+			Self::NetworkFailure(error) => Some(error),
+			Self::OtherFailure(error) => Some(error.as_ref()),
+			_ => None,
+		}
+	}
+}
 
 impl From<EResult> for UpdateAuthSessionError {
 	fn from(err: EResult) -> Self {

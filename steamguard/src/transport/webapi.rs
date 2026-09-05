@@ -104,17 +104,33 @@ pub(crate) fn send_web(
 	send_web_with_limits(client, request, false)
 }
 
+fn send(
+	request: RequestBuilder,
+	approved: bool,
+) -> Result<reqwest::blocking::Response, NetworkError> {
+	request.send().map_err(|error| {
+		if approved {
+			NetworkError::from_approved_send(error)
+		} else {
+			NetworkError::from(error)
+		}
+	})
+}
+
 fn send_web_with_limits(
 	client: &reqwest::blocking::Client,
 	request: WebRequest<'_>,
 	bounded: bool,
 ) -> Result<WebResponse, NetworkError> {
 	let endpoint = request.endpoint.name();
-	let response = build_web_request(client, request)?.send()?;
+	let response = send(build_web_request(client, request)?, bounded)?;
 	let status = response.status().as_u16();
 	debug!("Web request completed: endpoint={endpoint}, status={status}");
 	if bounded {
 		check_headers(&response)?;
+		if !response.status().is_success() {
+			return Err(NetworkError::http_status(&response));
+		}
 	}
 	let response = NetworkError::ensure_success(response)?;
 	let body = if bounded {
@@ -241,11 +257,13 @@ impl Transport for WebApiTransport {
 			req.multipart(form)
 		};
 
-		let resp = req.send().map_err(NetworkError::from)?;
+		let resp = send(req, self.bounded_responses)?;
 		let status = resp.status();
 		debug!("Response HTTP status: {}", status);
 		if self.bounded_responses {
 			check_headers(&resp)?;
+		} else if status == reqwest::StatusCode::UNAUTHORIZED {
+			return Err(TransportError::Unauthorized);
 		}
 		if !status.is_success() {
 			return Err(NetworkError::http_status(&resp).into());

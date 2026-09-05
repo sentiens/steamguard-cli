@@ -325,7 +325,7 @@ fn take_replacement_token(
 		.ok_or(TransferError::MissingReplacementToken)
 }
 
-#[derive(Error, Debug)]
+#[derive(Error)]
 pub enum AccountLinkError {
 	/// No phone number on the account
 	#[error("A phone number is needed, but not already present on the account.")]
@@ -341,8 +341,17 @@ pub enum AccountLinkError {
 	GenericFailure,
 	#[error("Steam returned an unexpected error code: {0:?}")]
 	UnknownEResult(EResult),
-	#[error(transparent)]
+	#[error("Unexpected error while linking the authenticator")]
 	Unknown(#[from] anyhow::Error),
+}
+
+impl std::fmt::Debug for AccountLinkError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::Unknown(_) => f.write_str("Unknown([REDACTED])"),
+			_ => std::fmt::Display::fmt(self, f),
+		}
+	}
 }
 
 impl From<EResult> for AccountLinkError {
