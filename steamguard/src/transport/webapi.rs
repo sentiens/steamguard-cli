@@ -108,7 +108,9 @@ fn send(
 	request: RequestBuilder,
 	approved: bool,
 ) -> Result<reqwest::blocking::Response, NetworkError> {
-	request.send().map_err(|error| {
+	let (client, request) = request.build_split();
+	let request = request.map_err(NetworkError::from_request_build)?;
+	client.execute(request).map_err(|error| {
 		if approved {
 			NetworkError::from_approved_send(error)
 		} else {

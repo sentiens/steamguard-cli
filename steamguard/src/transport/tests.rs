@@ -1,7 +1,7 @@
 use std::{
 	error::Error,
 	io::{Read, Write},
-	net::{TcpListener, TcpStream},
+	net::{SocketAddr, TcpListener, TcpStream},
 	process::Command,
 	sync::{mpsc, Arc},
 	thread,
@@ -48,6 +48,62 @@ pub(super) fn read_headers(stream: &mut impl Read) -> String {
 		bytes.push(byte[0]);
 	}
 	String::from_utf8(bytes).unwrap()
+}
+
+// Inspect typed fields without invoking arbitrary source Display or Debug implementations.
+pub(super) fn error_facts(error: &(dyn Error + 'static)) -> String {
+	let facts = if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+		format!(
+			"reqwest(builder={}, request={}, connect={}, timeout={}, status={:?}, redirect={}, body={}, decode={})",
+			error.is_builder(), error.is_request(), error.is_connect(), error.is_timeout(),
+			error.status().map(|status| status.as_u16()), error.is_redirect(), error.is_body(), error.is_decode()
+		)
+	} else if let Some(error) = error.downcast_ref::<std::io::Error>() {
+		format!("io(kind={:?}, os={:?})", error.kind(), error.raw_os_error())
+	} else {
+		"opaque cause".to_owned()
+	};
+	let source = error
+		.downcast_ref::<std::io::Error>()
+		.and_then(|error| error.get_ref().map(|inner| inner as &(dyn Error + 'static)))
+		.or_else(|| error.source());
+	match source {
+		Some(source) => format!("{facts} -> {}", error_facts(source)),
+		None => facts,
+	}
+}
+
+pub(super) fn refused_endpoint() -> ((TcpStream, TcpStream), SocketAddr) {
+	// A bound-only socket can silently drop SYNs on some platforms. Hold a connected client
+	// endpoint and its peer instead: the target port stays out of ephemeral allocation and
+	// never listens. This does not prevent explicit SO_REUSEADDR rebinding on every platform.
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let client =
+		TcpStream::connect_timeout(&listener.local_addr().unwrap(), Duration::from_secs(2))
+			.unwrap();
+	let (peer, _) = listener.accept().unwrap();
+	let address = client.local_addr().unwrap();
+	((client, peer), address)
+}
+
+#[test]
+fn held_client_endpoint_refuses_new_connections() {
+	let ((mut client, mut peer), address) = refused_endpoint();
+	assert_eq!(
+		TcpStream::connect_timeout(&address, Duration::from_secs(2))
+			.unwrap_err()
+			.kind(),
+		std::io::ErrorKind::ConnectionRefused
+	);
+	client
+		.set_read_timeout(Some(Duration::from_secs(2)))
+		.unwrap();
+	peer.set_write_timeout(Some(Duration::from_secs(2)))
+		.unwrap();
+	peer.write_all(b"held").unwrap();
+	let mut bytes = [0; 4];
+	client.read_exact(&mut bytes).unwrap();
+	assert_eq!(&bytes, b"held");
 }
 
 #[cfg(feature = "test-endpoints")]
@@ -247,9 +303,7 @@ fn redirect_then_connection_failure_does_not_prove_no_send() {
 	for raw_conversion in [false, true] {
 		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 		let url = format!("http://{}/already-sent", listener.local_addr().unwrap());
-		let refused = TcpListener::bind("127.0.0.1:0").unwrap();
-		let destination = refused.local_addr().unwrap();
-		drop(refused);
+		let (_reservation, destination) = refused_endpoint();
 		let server = thread::spawn(move || {
 			let mut stream = accept(&listener);
 			let request = read_headers(&mut stream);
@@ -267,20 +321,183 @@ fn redirect_then_connection_failure_does_not_prove_no_send() {
 			web_get(&WebApiTransport::new(client), &url).unwrap_err()
 		};
 		assert!(server.join().unwrap().starts_with("GET /already-sent "));
-		assert_eq!(error.kind(), NetworkErrorKind::Connection);
+		assert_eq!(
+			error.kind(),
+			NetworkErrorKind::Connection,
+			"{}",
+			error_facts(&error)
+		);
 		assert_eq!(error.sent(), RequestSent::Maybe);
 	}
 }
 
 #[test]
 fn approved_connection_refusal_preserves_no_send_proof() {
-	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-	let transport = proxied(&listener);
-	drop(listener);
+	let (_reservation, address) = refused_endpoint();
+	let proxy = ProxyConfig::new(format!("http://{address}")).unwrap();
+	let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
 	let error = web_get(&transport, "http://origin.invalid/refused").unwrap_err();
-	assert_eq!(error.kind(), NetworkErrorKind::Connection);
+	eprintln!(
+		"refusal: kind={:?}, sent={:?}, {}",
+		error.kind(),
+		error.sent(),
+		error_facts(&error)
+	);
+	assert_eq!(
+		error.kind(),
+		NetworkErrorKind::Connection,
+		"{}",
+		error_facts(&error)
+	);
 	assert_eq!(error.sent(), RequestSent::No);
 	assert!(error.source().unwrap().is::<reqwest::Error>());
+}
+
+fn assert_redirect_builder_is_maybe(raw_conversion: bool) {
+	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+	let url = format!("http://{}/already-sent", listener.local_addr().unwrap());
+	let server = thread::spawn(move || {
+		let mut stream = accept(&listener);
+		let request = read_headers(&mut stream);
+		stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: ftp://redirect-canary.invalid/file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+		(request, listener)
+	});
+	let client = reqwest::blocking::Client::builder()
+		.no_proxy()
+		.timeout(Duration::from_secs(2))
+		.build()
+		.unwrap();
+	let error = if raw_conversion {
+		NetworkError::from(client.get(&url).send().unwrap_err())
+	} else {
+		web_get(&WebApiTransport::new(client), &url).unwrap_err()
+	};
+	let (request, listener) = server.join().unwrap();
+	assert!(request.starts_with("GET /already-sent HTTP/1.1\r\n"));
+	assert_eq!(1 + pending_connections(&listener), 1);
+	let source = error
+		.source()
+		.unwrap()
+		.downcast_ref::<reqwest::Error>()
+		.unwrap();
+	assert!(source.is_builder(), "{}", error_facts(&error));
+	assert!(source.url().is_none());
+	assert!(source.source().is_some());
+	assert_eq!(error.kind(), NetworkErrorKind::Request);
+	for diagnostic in [
+		format!("{error}"),
+		format!("{error:#}"),
+		format!("{error:?}"),
+		format!("{error:#?}"),
+	] {
+		assert!(!diagnostic.contains("://"));
+		assert!(!diagnostic.contains("redirect-canary"));
+	}
+	eprintln!(
+		"redirect: raw_conversion={raw_conversion}, received=1, kind={:?}, sent={:?}, {}",
+		error.kind(),
+		error.sent(),
+		error_facts(&error)
+	);
+	assert_eq!(error.sent(), RequestSent::Maybe);
+}
+
+#[test]
+fn generic_redirect_to_unsupported_scheme_does_not_prove_no_send() {
+	assert_redirect_builder_is_maybe(true);
+}
+
+#[test]
+fn plain_redirect_to_unsupported_scheme_does_not_prove_no_send() {
+	assert_redirect_builder_is_maybe(false);
+}
+
+#[test]
+fn local_request_construction_preserves_no_send_proof() {
+	for approved in [false, true] {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let url = format!("http://{}/not-sent", listener.local_addr().unwrap());
+		let transport = if approved {
+			proxied(&listener)
+		} else {
+			WebApiTransport::new(
+				reqwest::blocking::Client::builder()
+					.no_proxy()
+					.build()
+					.unwrap(),
+			)
+		};
+		let error = transport
+			.send_web(WebRequest::new(
+				WebEndpoint::Test(&url),
+				&[],
+				"invalid\nheader",
+				"",
+				"en",
+			))
+			.unwrap_err();
+		assert_eq!(error.kind(), NetworkErrorKind::Request);
+		assert_eq!(error.sent(), RequestSent::No);
+		let source = error
+			.source()
+			.unwrap()
+			.downcast_ref::<reqwest::Error>()
+			.unwrap();
+		assert!(source.is_builder());
+		assert!(source.source().is_some());
+		assert!(source.url().is_none());
+		let error = web_get(&transport, "invalid URL").unwrap_err();
+		assert_eq!(error.kind(), NetworkErrorKind::InvalidRequest);
+		assert_eq!(error.sent(), RequestSent::No);
+		assert_eq!(pending_connections(&listener), 0);
+	}
+}
+
+#[test]
+fn generic_builder_conversion_does_not_assume_local_provenance() {
+	let client = reqwest::blocking::Client::builder()
+		.no_proxy()
+		.build()
+		.unwrap();
+	let source = client
+		.get("http://origin.invalid/not-sent")
+		.header("user-agent", "invalid\nheader")
+		.build()
+		.unwrap_err();
+	assert!(source.is_builder());
+	// The recipient of a public conversion cannot know which boundary produced this category.
+	let error = NetworkError::from(source);
+	assert_eq!(error.kind(), NetworkErrorKind::Request);
+	assert_eq!(error.sent(), RequestSent::Maybe);
+	assert!(error.source().unwrap().is::<reqwest::Error>());
+}
+
+#[test]
+fn unsupported_web_transport_preserves_no_send_proof() {
+	struct Unsupported;
+	impl Transport for Unsupported {
+		fn send_request<
+			Req: crate::steamapi::BuildableRequest + protobuf::MessageFull,
+			Res: protobuf::MessageFull,
+		>(
+			&self,
+			_: crate::steamapi::ApiRequest<Req>,
+		) -> Result<crate::steamapi::ApiResponse<Res>, TransportError> {
+			panic!("unsupported web request must not invoke the API transport");
+		}
+		fn close(&mut self) {}
+	}
+	let error = Unsupported
+		.send_web(WebRequest::new(
+			WebEndpoint::Test("http://origin.invalid/not-sent"),
+			&[],
+			"test",
+			"",
+			"en",
+		))
+		.unwrap_err();
+	assert_eq!(error.kind(), NetworkErrorKind::UnsupportedTransport);
+	assert_eq!(error.sent(), RequestSent::No);
 }
 
 #[test]

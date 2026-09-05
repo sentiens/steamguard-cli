@@ -293,7 +293,8 @@ mod tests {
 
 	#[test]
 	fn request_errors_redact_proxy_credentials() {
-		let proxy = ProxyConfig::new("http://127.0.0.1:1")
+		let (_reservation, address) = super::super::tests::refused_endpoint();
+		let proxy = ProxyConfig::new(format!("http://{address}"))
 			.unwrap()
 			.with_basic_auth("proxy-user-canary", "proxy-password-canary");
 		let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
