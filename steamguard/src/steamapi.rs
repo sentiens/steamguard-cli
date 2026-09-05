@@ -120,6 +120,15 @@ impl<T> fmt::Debug for ApiResponse<T> {
 }
 
 impl<T> ApiResponse<T> {
+	/// Creates a response for a custom [`Transport`] implementation.
+	pub fn new(result: EResult, error_message: Option<String>, response_data: T) -> Self {
+		Self {
+			result,
+			error_message,
+			response_data,
+		}
+	}
+
 	pub fn result(&self) -> EResult {
 		self.result
 	}
