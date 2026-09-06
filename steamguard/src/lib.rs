@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, io::Read};
 use token::Tokens;
 use transport::{Transport, TransportError};
-pub use userlogin::{DeviceDetails, LoginError, UserLogin};
+pub use userlogin::{DeviceDetails, LoginError, PollOutcome, UserLogin};
 
 #[macro_use]
 extern crate lazy_static;

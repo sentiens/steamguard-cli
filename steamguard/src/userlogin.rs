@@ -2,8 +2,8 @@ use crate::api_responses::AllowedConfirmation;
 use crate::protobufs::custom::CAuthentication_BeginAuthSessionViaCredentials_Request_BinaryGuardData;
 use crate::protobufs::enums::ESessionPersistence;
 use crate::protobufs::steammessages_auth_steamclient::{
-	CAuthentication_AllowedConfirmation, CAuthentication_DeviceDetails,
-	CAuthentication_PollAuthSessionStatus_Request, CAuthentication_PollAuthSessionStatus_Response,
+	CAuthentication_AccessToken_GenerateForApp_Request, CAuthentication_AllowedConfirmation,
+	CAuthentication_DeviceDetails, CAuthentication_PollAuthSessionStatus_Request,
 	EAuthSessionGuardType,
 };
 use crate::protobufs::steammessages_auth_steamclient::{
@@ -13,7 +13,6 @@ use crate::protobufs::steammessages_auth_steamclient::{
 	CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request,
 	CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response, EAuthTokenPlatformType,
 };
-use crate::refresher::TokenRefresher;
 use crate::steamapi::authentication::AuthenticationClient;
 use crate::steamapi::EResult;
 use crate::token::Tokens;
@@ -28,7 +27,10 @@ pub enum LoginError {
 	BadCredentials,
 	TooManyAttempts,
 	SessionExpired,
+	SessionNotStarted,
 	UnknownEResult(EResult),
+	/// Steam returned an incomplete token response or an unsupported login outcome.
+	UnknownOutcome,
 	AuthAlreadyStarted,
 	TransportError(TransportError),
 	NetworkFailure(NetworkError),
@@ -41,6 +43,8 @@ impl fmt::Debug for LoginError {
 			Self::BadCredentials => f.write_str("BadCredentials"),
 			Self::TooManyAttempts => f.write_str("TooManyAttempts"),
 			Self::SessionExpired => f.write_str("SessionExpired"),
+			Self::SessionNotStarted => f.write_str("SessionNotStarted"),
+			Self::UnknownOutcome => f.write_str("UnknownOutcome"),
 			Self::AuthAlreadyStarted => f.write_str("AuthAlreadyStarted"),
 			Self::UnknownEResult(result) => f.debug_tuple("UnknownEResult").field(result).finish(),
 			Self::TransportError(error) => f.debug_tuple("TransportError").field(error).finish(),
@@ -95,9 +99,30 @@ impl From<EResult> for LoginError {
 	fn from(err: EResult) -> Self {
 		match err {
 			EResult::InvalidPassword => LoginError::BadCredentials,
-			EResult::RateLimitExceeded => LoginError::TooManyAttempts,
-			EResult::Expired => LoginError::SessionExpired,
+			EResult::RateLimitExceeded | EResult::AccountLoginDeniedThrottle => {
+				LoginError::TooManyAttempts
+			}
+			// Steam also reports a missing/expired polling session as FileNotFound.
+			EResult::Expired | EResult::FileNotFound => LoginError::SessionExpired,
 			err => LoginError::UnknownEResult(err),
+		}
+	}
+}
+
+/// The result of one login polling step.
+#[derive(Clone)]
+pub enum PollOutcome {
+	/// The session has not issued tokens yet.
+	Waiting,
+	/// Login completed, including access-token generation when Steam only issued a refresh token.
+	Tokens(Tokens),
+}
+
+impl fmt::Debug for PollOutcome {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Waiting => f.write_str("Waiting"),
+			Self::Tokens(_) => f.debug_tuple("Tokens").field(&"[REDACTED]").finish(),
 		}
 	}
 }
@@ -196,6 +221,7 @@ where
 
 		debug!("auth session started");
 		let started_auth: StartAuth = resp.into_response_data().into();
+		started_auth.interval().map(poll_interval).transpose()?;
 		let allowed_confirmations = started_auth
 			.allowed_confirmations()
 			.iter()
@@ -231,75 +257,97 @@ where
 		};
 
 		debug!("auth session started");
-		self.started_auth = Some(resp.into_response_data().into());
+		let started_auth: StartAuth = resp.into_response_data().into();
+		started_auth.interval().map(poll_interval).transpose()?;
+		self.started_auth = Some(started_auth);
 
 		Ok(return_resp)
 	}
 
-	fn poll_until_info(
-		&mut self,
-	) -> anyhow::Result<CAuthentication_PollAuthSessionStatus_Response> {
-		let Some(started_auth) = self.started_auth.as_ref() else {
-			return Err(anyhow::anyhow!("no auth session started"));
-		};
-
-		loop {
-			let mut req = CAuthentication_PollAuthSessionStatus_Request::new();
-			req.set_client_id(started_auth.client_id());
-			req.set_request_id(started_auth.request_id().to_vec());
-
-			let resp = self.client.poll_auth_session(req)?;
-			if resp.result != EResult::OK {
-				// EResult::FileNotFound is returned when the server couldn't find the auth session
-				return Err(anyhow::anyhow!("poll failed: {:?}", resp.result));
-			}
-
-			let data = resp.response_data();
-			let has_data = data.has_access_token()
-				|| data.has_account_name()
-				|| data.has_agreement_session_url()
-				|| data.has_had_remote_interaction()
-				|| data.has_new_challenge_url()
-				|| data.has_new_client_id()
-				|| data.has_new_guard_data()
-				|| data.has_refresh_token();
-
-			if has_data {
-				return Ok(resp.into_response_data());
-			}
-
-			std::thread::sleep(poll_interval(started_auth.interval())?);
-		}
+	/// Returns Steam's requested polling interval without applying a default or a clamp.
+	///
+	/// Returns `None` before authentication starts or when Steam omits the interval.
+	/// Invalid intervals are rejected when starting authentication.
+	pub fn poll_interval(&self) -> Option<Duration> {
+		self.started_auth
+			.as_ref()?
+			.interval()
+			.and_then(|seconds| poll_interval(seconds).ok())
 	}
 
+	/// Polls the current session once, without sleeping or retrying.
+	///
+	/// This makes one polling request. A refresh-only response also requires one
+	/// access-token request; both requests use the configured transport synchronously.
+	/// Callers schedule subsequent steps using [`Self::poll_interval`].
+	pub fn poll_once(&mut self) -> Result<PollOutcome, LoginError> {
+		let Some(started_auth) = self.started_auth.as_mut() else {
+			return Err(LoginError::SessionNotStarted);
+		};
+
+		let mut req = CAuthentication_PollAuthSessionStatus_Request::new();
+		req.set_client_id(started_auth.client_id());
+		req.set_request_id(started_auth.request_id().to_vec());
+
+		let resp = self.client.poll_auth_session(req)?;
+		if resp.result != EResult::OK {
+			return Err(resp.result.into());
+		}
+
+		let mut data = resp.into_response_data();
+		if data.has_new_client_id() {
+			started_auth.set_client_id(data.new_client_id());
+		}
+		if !data.agreement_session_url().is_empty() {
+			return Err(LoginError::UnknownOutcome);
+		}
+		if !data.has_access_token() && !data.has_refresh_token() {
+			return Ok(PollOutcome::Waiting);
+		}
+		if data.refresh_token().is_empty() {
+			return Err(LoginError::UnknownOutcome);
+		}
+
+		let mut tokens = Tokens::new(data.take_access_token(), data.take_refresh_token());
+		if tokens.access_token().expose_secret().is_empty() {
+			// Steam has issued refresh-only login responses since 2023-09-12.
+			let steam_id = tokens
+				.refresh_token()
+				.decode()
+				.context("decoding refresh token for steam id")?
+				.try_steam_id()
+				.context("reading Steam ID from refresh token")?;
+			let mut req = CAuthentication_AccessToken_GenerateForApp_Request::new();
+			req.set_steamid(steam_id);
+			req.set_refresh_token(tokens.refresh_token().expose_secret().to_owned());
+			let resp = self
+				.client
+				.generate_access_token(req, tokens.access_token())?;
+			if resp.result != EResult::OK {
+				return Err(resp.result.into());
+			}
+			let mut data = resp.into_response_data();
+			if data.access_token().is_empty() {
+				return Err(LoginError::UnknownOutcome);
+			}
+			tokens.set_access_token(data.take_access_token().into());
+		}
+		Ok(PollOutcome::Tokens(tokens))
+	}
+
+	/// Polls until tokens are ready, waiting between steps at Steam's requested interval.
+	/// When Steam omits the interval, preserves the upstream zero-duration wait.
 	pub fn poll_until_tokens(&mut self) -> anyhow::Result<Tokens> {
 		loop {
-			let mut next_poll = self.poll_until_info()?;
-
-			if next_poll.has_access_token() || next_poll.has_refresh_token() {
-				// On 2023-09-12, Steam stopped issuing access tokens alongside refresh tokens for newly authenticated sessions.
-				// If they decide to revert this change, we'll accept the access token if it's present.
-
-				let access_token = next_poll.take_access_token();
-				if access_token.is_empty() {
-					// Let's go ahead an fetch the access token, because we are going to need it anyway.
-					let mut refresher = TokenRefresher::new(self.client.clone());
-					let mut tokens = Tokens::new(
-						next_poll.take_access_token(),
-						next_poll.take_refresh_token(),
-					);
-					let steamid = tokens
-						.refresh_token()
-						.decode()
-						.context("decoding refresh token for steam id")?
-						.try_steam_id()
-						.context("reading Steam ID from refresh token")?;
-					let access_token = refresher.refresh(steamid, &tokens)?;
-					tokens.set_access_token(access_token);
-					return Ok(tokens);
-				} else {
-					return Ok(Tokens::new(access_token, next_poll.take_refresh_token()));
-				};
+			match self.poll_once()? {
+				PollOutcome::Tokens(tokens) => return Ok(tokens),
+				PollOutcome::Waiting => {
+					let interval = match self.poll_interval() {
+						Some(interval) => interval,
+						None => Duration::ZERO,
+					};
+					std::thread::sleep(interval);
+				}
 			}
 		}
 	}
@@ -393,6 +441,13 @@ impl StartAuth {
 		}
 	}
 
+	fn set_client_id(&mut self, client_id: u64) {
+		match self {
+			StartAuth::BeginAuthSessionViaCredentials(resp) => resp.set_client_id(client_id),
+			StartAuth::BeginAuthSessionViaQR(resp) => resp.set_client_id(client_id),
+		}
+	}
+
 	pub(crate) fn request_id(&self) -> &[u8] {
 		match self {
 			StartAuth::BeginAuthSessionViaCredentials(resp) => resp.request_id(),
@@ -400,10 +455,10 @@ impl StartAuth {
 		}
 	}
 
-	pub(crate) fn interval(&self) -> f32 {
+	pub(crate) fn interval(&self) -> Option<f32> {
 		match self {
-			StartAuth::BeginAuthSessionViaCredentials(resp) => resp.interval(),
-			StartAuth::BeginAuthSessionViaQR(resp) => resp.interval(),
+			StartAuth::BeginAuthSessionViaCredentials(resp) => resp.interval,
+			StartAuth::BeginAuthSessionViaQR(resp) => resp.interval,
 		}
 	}
 
