@@ -25,6 +25,16 @@ where
 	client: TwoFactorClient<T>,
 }
 
+#[derive(Debug, Error)]
+pub enum QueryStatusError {
+	#[error("Steam rejected the status query with result {0:?}")]
+	SteamRejected(EResult),
+	#[error("Steam returned an incomplete authenticator status")]
+	MalformedResponse,
+	#[error("Status query transport failed: {0}")]
+	Transport(#[from] TransportError),
+}
+
 impl<T: Transport> std::fmt::Debug for AccountLinker<T> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("AccountLinker")
@@ -148,14 +158,41 @@ where
 		Ok(())
 	}
 
+	/// Queries status, rejecting Steam errors and incomplete responses before protobuf defaults
+	/// can turn a missing state into zero. Semantic errors wrap [`QueryStatusError`] in
+	/// [`TransportError::Unknown`] to preserve the upstream signature.
 	pub fn query_status(
 		&self,
 		account: &SteamGuardAccount,
 	) -> Result<CTwoFactor_Status_Response, TransportError> {
+		match self.query_status_checked(account) {
+			Ok(response) => Ok(response),
+			Err(QueryStatusError::Transport(error)) => Err(error),
+			Err(error) => Err(TransportError::Unknown(error.into())),
+		}
+	}
+
+	/// Queries status with typed Steam result and format errors.
+	pub fn query_status_checked(
+		&self,
+		account: &SteamGuardAccount,
+	) -> Result<CTwoFactor_Status_Response, QueryStatusError> {
 		let mut req = CTwoFactor_Status_Request::new();
 		req.set_steamid(account.steam_id);
 
 		let resp = self.client.query_status(req, self.tokens.access_token())?;
+
+		if resp.result != EResult::OK {
+			return Err(QueryStatusError::SteamRejected(resp.result));
+		}
+		let status = resp.response_data();
+		if !status.has_state()
+			|| !status.has_token_gid()
+			|| !status.has_revocation_attempts_remaining()
+			|| !status.has_steamguard_scheme()
+		{
+			return Err(QueryStatusError::MalformedResponse);
+		}
 
 		Ok(resp.into_response_data())
 	}

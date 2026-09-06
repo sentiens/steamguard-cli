@@ -420,6 +420,21 @@ impl<'a> WebRequest<'a> {
 		self.form_body = Some(body);
 		self
 	}
+
+	/// The destination of this request, for custom transports.
+	pub fn endpoint(&self) -> WebEndpoint<'a> {
+		self.endpoint
+	}
+
+	/// Query parameters, which may contain credentials and confirmation nonces.
+	pub fn query(&self) -> &[(&'static str, Cow<'a, str>)] {
+		self.query
+	}
+
+	/// The form body, which may contain credentials and confirmation nonces.
+	pub fn form_body(&self) -> Option<&str> {
+		self.form_body
+	}
 }
 
 impl fmt::Debug for WebRequest<'_> {
@@ -448,6 +463,15 @@ pub struct WebResponse {
 }
 
 impl WebResponse {
+	/// Creates a successful HTTP response for a custom [`Transport`] implementation.
+	/// The transport must classify non-success HTTP statuses before returning a response.
+	pub fn new(status: u16, body: impl Into<String>) -> Self {
+		Self {
+			status,
+			body: body.into(),
+		}
+	}
+
 	pub fn status(&self) -> u16 {
 		self.status
 	}

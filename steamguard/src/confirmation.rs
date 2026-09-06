@@ -130,8 +130,7 @@ where
 		let text = resp.into_body();
 		debug!("Confirmation list response length: {} bytes", text.len());
 
-		let mut deser = serde_json::Deserializer::from_str(text.as_str());
-		let body: ConfirmationListResponse = serde_path_to_error::deserialize(&mut deser)?;
+		let body: ConfirmationListResponse = serde_json::from_str(&text)?;
 
 		if body.needauth.unwrap_or(false) {
 			return Err(ConfirmerError::InvalidTokens);
@@ -189,8 +188,7 @@ where
 			raw.len()
 		);
 
-		let mut deser = serde_json::Deserializer::from_str(raw.as_str());
-		let body: SendConfirmationResponse = serde_path_to_error::deserialize(&mut deser)?;
+		let body: SendConfirmationResponse = serde_json::from_str(&raw)?;
 
 		if body.needsauth.unwrap_or(false) {
 			return Err(ConfirmerError::InvalidTokens);
@@ -280,8 +278,7 @@ where
 			raw.len()
 		);
 
-		let mut deser = serde_json::Deserializer::from_str(raw.as_str());
-		let body: SendConfirmationResponse = serde_path_to_error::deserialize(&mut deser)?;
+		let body: SendConfirmationResponse = serde_json::from_str(&raw)?;
 
 		if body.needsauth.unwrap_or(false) {
 			return Err(ConfirmerError::InvalidTokens);
@@ -378,8 +375,8 @@ where
 		))?;
 
 		let text = resp.into_body();
-		let mut deser = serde_json::Deserializer::from_str(text.as_str());
-		let body: ConfirmationDetailsResponse = serde_path_to_error::deserialize(&mut deser)?;
+		let body: ConfirmationDetailsResponse =
+			serde_json::from_str(&text).map_err(ConfirmerError::from)?;
 
 		ensure!(body.success);
 		Ok(body.html)
@@ -439,6 +436,24 @@ impl From<reqwest::Error> for ConfirmerError {
 	}
 }
 
+impl From<serde_json::Error> for ConfirmerError {
+	fn from(error: serde_json::Error) -> Self {
+		// Retain the typed source for internal inspection; public diagnostics are redacted.
+		Self::DeserializeError(serde_path_to_error::Error::new(
+			serde_path_to_error::Track::new().path(),
+			error,
+		))
+	}
+}
+
+fn default_if_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+	D: Deserializer<'de>,
+	T: Deserialize<'de> + Default,
+{
+	Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// A mobile confirmation. There are multiple things that can be confirmed, like trade offers.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct Confirmation {
@@ -450,12 +465,18 @@ pub struct Confirmation {
 	pub creator_id: String,
 	pub nonce: String,
 	pub creation_time: u64,
+	#[serde(default, deserialize_with = "default_if_null")]
 	pub cancel: String,
+	#[serde(default, deserialize_with = "default_if_null")]
 	pub accept: String,
 	pub icon: Option<String>,
+	#[serde(default, deserialize_with = "default_if_null")]
 	pub multi: bool,
 	pub headline: String,
 	pub summary: Vec<String>,
+	/// Steam's warning text. The field must be present, but may be null.
+	#[serde(deserialize_with = "Option::deserialize")]
+	pub warn: Option<String>,
 }
 
 impl fmt::Debug for Confirmation {
@@ -473,6 +494,7 @@ impl fmt::Debug for Confirmation {
 			.field("multi", &self.multi)
 			.field("headline", &"[REDACTED]")
 			.field("summary", &"[REDACTED]")
+			.field("warn", &self.warn.as_ref().map(|_| "[REDACTED]"))
 			.finish()
 	}
 }
@@ -563,6 +585,11 @@ impl<'de> Deserialize<'de> for ConfirmationListResponse {
 		}
 
 		let response = Response::deserialize(deserializer)?;
+		if response.success && response.needauth == Some(true) {
+			return Err(serde::de::Error::custom(
+				"confirmation response has contradictory success and authentication status",
+			));
+		}
 		let conf = match response.conf {
 			Some(conf) => conf,
 			None if response.success => return Err(serde::de::Error::missing_field("conf")),
@@ -588,13 +615,37 @@ impl fmt::Debug for ConfirmationListResponse {
 	}
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 pub struct SendConfirmationResponse {
 	pub success: bool,
-	#[serde(default)]
 	pub needsauth: Option<bool>,
-	#[serde(default)]
 	pub message: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SendConfirmationResponse {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		#[derive(Deserialize)]
+		struct Response {
+			success: bool,
+			needsauth: Option<bool>,
+			message: Option<String>,
+		}
+
+		let response = Response::deserialize(deserializer)?;
+		if response.success && response.needsauth == Some(true) {
+			return Err(serde::de::Error::custom(
+				"confirmation response has contradictory success and authentication status",
+			));
+		}
+		Ok(Self {
+			success: response.success,
+			needsauth: response.needsauth,
+			message: response.message,
+		})
+	}
 }
 
 impl fmt::Debug for SendConfirmationResponse {
@@ -699,16 +750,31 @@ mod tests {
 
 	#[test]
 	fn parses_a_complete_confirmation_list_fixture() -> anyhow::Result<()> {
-		let response: ConfirmationListResponse =
-			serde_json::from_str(include_str!("fixtures/confirmations/list-well-formed.json"))?;
-		let confirmation = response
-			.conf
-			.first()
-			.context("well-formed fixture should contain a confirmation")?;
+		let fixture = include_str!("fixtures/confirmations/list-well-formed.json");
+		let response: ConfirmationListResponse = serde_json::from_str(fixture)?;
+		let raw: serde_json::Value = serde_json::from_str(fixture)?;
+		let items = raw["conf"].as_array().context("fixture must have a list")?;
 
 		assert!(response.success);
-		assert_eq!(response.conf.len(), 1);
-		assert_eq!(confirmation.conf_type, ConfirmationType::Trade);
+		assert_eq!(response.needauth, Some(false));
+		assert_eq!(response.message, None);
+		assert_eq!(response.conf.len(), 2);
+		assert_eq!(response.conf[0].conf_type, ConfirmationType::Trade);
+		assert_eq!(response.conf[1].conf_type, ConfirmationType::MarketSell);
+		for (confirmation, item) in response.conf.iter().zip(items) {
+			assert_eq!(confirmation.type_name, item["type_name"]);
+			assert_eq!(confirmation.id, item["id"]);
+			assert_eq!(confirmation.creator_id, item["creator_id"]);
+			assert_eq!(confirmation.nonce, item["nonce"]);
+			assert_eq!(confirmation.creation_time, item["creation_time"]);
+			assert_eq!(confirmation.cancel, item["cancel"]);
+			assert_eq!(confirmation.accept, item["accept"]);
+			assert_eq!(serde_json::json!(confirmation.icon), item["icon"]);
+			assert_eq!(confirmation.multi, item["multi"]);
+			assert_eq!(confirmation.headline, item["headline"]);
+			assert_eq!(serde_json::json!(confirmation.summary), item["summary"]);
+			assert_eq!(serde_json::json!(confirmation.warn), item["warn"]);
+		}
 		Ok(())
 	}
 
@@ -826,6 +892,7 @@ mod tests {
 			multi: false,
 			headline: "headline-canary".to_owned(),
 			summary: vec!["summary-canary".to_owned()],
+			warn: Some("warn-canary".to_owned()),
 		};
 		let confirmation_id = ConfirmationId::new(&confirmation.id, &confirmation.nonce);
 		let response = ConfirmationListResponse {
@@ -852,6 +919,7 @@ mod tests {
 			"icon-canary",
 			"headline-canary",
 			"summary-canary",
+			"warn-canary",
 			"list-message-canary",
 			"action-message-canary",
 		] {

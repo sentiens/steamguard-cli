@@ -13,7 +13,19 @@
 			"icon": null,
 			"multi": false,
 			"headline": "Unknown confirmation",
-			"summary": []
+			"summary": [],
+			"warn": null
+		},
+		{
+			"type": 2,
+			"type_name": "Trade",
+			"id": "40000000005",
+			"creator_id": "50000000006",
+			"nonce": "60000000007",
+			"creation_time": 1700000002,
+			"headline": "Known confirmation after unknown type",
+			"summary": ["Synthetic fixture"],
+			"warn": "Verify this trade"
 		}
 	]
 }

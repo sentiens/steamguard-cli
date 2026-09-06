@@ -1,5 +1,7 @@
 {
 	"success": true,
+	"needauth": false,
+	"message": null,
 	"conf": [
 		{
 			"type": 2,
@@ -14,8 +16,25 @@
 			"multi": false,
 			"headline": "Trade confirmation",
 			"summary": [
-				"Synthetic fixture"
-			]
+				"Synthetic fixture",
+				"One item offered"
+			],
+			"warn": "Verify the recipient"
+		},
+		{
+			"type": 3,
+			"type_name": "Market listing",
+			"id": "10000000002",
+			"creator_id": "20000000003",
+			"nonce": "30000000004",
+			"creation_time": 1700000060,
+			"cancel": "Cancel listing",
+			"accept": "Create listing",
+			"icon": "https://example.invalid/synthetic-item.png",
+			"multi": true,
+			"headline": "Market confirmation",
+			"summary": ["Synthetic market item", "Price: 1.00"],
+			"warn": null
 		}
 	]
 }

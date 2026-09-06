@@ -147,7 +147,8 @@ impl<T> ApiResponse<T> {
 }
 
 // TODO: generate from protobufs
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, num_enum::IntoPrimitive)]
+#[repr(i32)]
 pub enum EResult {
 	Invalid = 0,
 	OK = 1,
@@ -276,11 +277,22 @@ pub enum EResult {
 	ChargerRequired = 125,
 	CachedCredentialInvalid = 126,
 	PhoneNumberIsVOIP = 127,
+	/// An unrecognized Steam result code, preserved without substituting `Invalid`.
+	#[num_enum(catch_all)]
+	Unknown(i32),
+}
+
+impl EResult {
+	/// Returns the original numeric Steam result code, including unknown values.
+	pub fn code(self) -> i32 {
+		self.into()
+	}
 }
 
 impl From<i32> for EResult {
 	fn from(value: i32) -> Self {
 		match value {
+			0 => EResult::Invalid,
 			1 => EResult::OK,
 			2 => EResult::Fail,
 			3 => EResult::NoConnection,
@@ -407,7 +419,7 @@ impl From<i32> for EResult {
 			125 => EResult::ChargerRequired,
 			126 => EResult::CachedCredentialInvalid,
 			127 => EResult::PhoneNumberIsVOIP,
-			_ => EResult::Invalid,
+			code => EResult::Unknown(code),
 		}
 	}
 }

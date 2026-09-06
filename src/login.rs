@@ -25,10 +25,10 @@ pub fn do_login<T: Transport + Clone>(
 		info!("Refreshing access token...");
 		let client = AuthenticationClient::new(transport.clone());
 		let mut refresher = TokenRefresher::new(client);
-		match refresher.refresh(account.steam_id, tokens) {
-			Ok(token) => {
+		match refresher.refresh_tokens(account.steam_id, tokens) {
+			Ok(refreshed) => {
 				info!("Successfully refreshed access token, no need to prompt to log in.");
-				tokens.set_access_token(token);
+				*tokens = refreshed;
 				return Ok(());
 			}
 			Err(err) => {

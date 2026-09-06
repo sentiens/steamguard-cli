@@ -86,6 +86,7 @@ pub fn demo_confirmation_menu() {
 			icon: Some("".to_owned()),
 			multi: false,
 			summary: vec![],
+			warn: None,
 		},
 		Confirmation {
 			id: "1234".to_owned(),
@@ -100,6 +101,7 @@ pub fn demo_confirmation_menu() {
 			icon: Some("".to_owned()),
 			multi: false,
 			summary: vec![],
+			warn: None,
 		},
 	])
 	.expect("confirmation menu demo failed");

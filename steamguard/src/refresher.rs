@@ -2,7 +2,7 @@ use crate::{
 	protobufs::steammessages_auth_steamclient::CAuthentication_AccessToken_GenerateForApp_Request,
 	steamapi::{AuthenticationClient, EResult},
 	token::{Jwt, Tokens},
-	transport::Transport,
+	transport::{Transport, TransportError},
 };
 
 pub struct TokenRefresher<T>
@@ -20,7 +20,21 @@ where
 		Self { client }
 	}
 
+	/// Refreshes only the access token, retaining the upstream return type.
+	/// Use [`Self::refresh_tokens`] to also receive a replacement refresh token.
 	pub fn refresh(&mut self, steam_id: u64, tokens: &Tokens) -> Result<Jwt, anyhow::Error> {
+		Ok(self
+			.refresh_tokens(steam_id, tokens)?
+			.access_token()
+			.clone())
+	}
+
+	/// Returns both tokens, keeping the current refresh token only when Steam omits a replacement.
+	pub fn refresh_tokens(
+		&mut self,
+		steam_id: u64,
+		tokens: &Tokens,
+	) -> Result<Tokens, RefreshError> {
 		let mut req = CAuthentication_AccessToken_GenerateForApp_Request::new();
 		req.set_steamid(steam_id);
 		req.set_refresh_token(tokens.refresh_token().expose_secret().to_owned());
@@ -30,14 +44,29 @@ where
 			.generate_access_token(req, tokens.access_token())?;
 
 		if resp.result != EResult::OK {
-			return Err(anyhow::anyhow!(
-				"Failed to refresh access token: {:?}",
-				resp.result
-			));
+			return Err(RefreshError::SteamRejected(resp.result));
 		}
 
 		let mut resp = resp.into_response_data();
 
-		Ok(resp.take_access_token().into())
+		if resp.access_token().is_empty() {
+			return Err(RefreshError::MalformedResponse);
+		}
+		let refresh_token = match resp.refresh_token.take() {
+			Some(token) if token.is_empty() => return Err(RefreshError::MalformedResponse),
+			Some(token) => token.into(),
+			None => tokens.refresh_token().clone(),
+		};
+		Ok(Tokens::new(resp.take_access_token(), refresh_token))
 	}
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RefreshError {
+	#[error("Steam rejected token refresh with result {0:?}")]
+	SteamRejected(EResult),
+	#[error("Steam returned an incomplete token refresh response")]
+	MalformedResponse,
+	#[error("Token refresh transport failed: {0}")]
+	Transport(#[from] TransportError),
 }

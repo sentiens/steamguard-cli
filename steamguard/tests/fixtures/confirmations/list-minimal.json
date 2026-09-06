@@ -1,0 +1,17 @@
+{
+	"success": true,
+	"conf": [
+		{
+			"type": 2,
+			"type_name": "Trade",
+			"id": "70000000001",
+			"creator_id": "80000000001",
+			"nonce": "90000000001",
+			"creation_time": 1700000100,
+			"headline": "Minimal trade",
+			"summary": [],
+			"warn": null,
+			"future_field": {"ignored": true}
+		}
+	]
+}
