@@ -109,16 +109,16 @@ fn do_login_impl<T: Transport + Clone>(
 				confirmation_methods = methods;
 				break;
 			}
-			Err(LoginError::TooManyAttempts) => {
+			Err(err @ LoginError::TooManyAttempts(_)) => {
 				error!("Too many login attempts. Steam is rate limiting you. Please wait a while and try again later.");
-				return Err(LoginError::TooManyAttempts.into());
+				return Err(err.into());
 			}
 			Err(LoginError::BadCredentials) => {
 				error!("Incorrect password for {username}");
 				password = tui::prompt_password()?;
 				continue;
 			}
-			Err(LoginError::SessionExpired) => {
+			Err(LoginError::SessionExpired(_)) => {
 				error!("Session expired. Please try again.");
 				bail!("Login session expired.");
 			}
@@ -202,8 +202,8 @@ fn do_login_impl<T: Transport + Clone>(
 							}
 
 							match err {
-								UpdateAuthSessionError::TooManyAttempts
-								| UpdateAuthSessionError::SessionExpired
+								UpdateAuthSessionError::TooManyAttempts(_)
+								| UpdateAuthSessionError::SessionExpired(_)
 								| UpdateAuthSessionError::InvalidGuardType => {
 									error!("Error is unrecoverable. Aborting.");
 									return Err(err.into());

@@ -15,6 +15,7 @@ use steamguard::{
 			CAuthentication_GetPasswordRSAPublicKey_Response as RsaResponse,
 			CAuthentication_PollAuthSessionStatus_Request as PollRequest,
 			CAuthentication_PollAuthSessionStatus_Response as PollResponse,
+			CAuthentication_UpdateAuthSessionWithSteamGuardCode_Request as UpdateRequest,
 			CAuthentication_UpdateAuthSessionWithSteamGuardCode_Response as UpdateResponse,
 			EAuthSessionGuardType, EAuthTokenPlatformType,
 		},
@@ -241,6 +242,7 @@ fn incomplete_qr_start_is_rejected_without_storing_session() {
 			"malformed start stored a session"
 		);
 		assert_eq!(login.poll_interval(), None);
+		assert_eq!(login.started_steam_id(), None);
 		transport.assert_finished();
 	}
 }
@@ -277,6 +279,7 @@ fn incomplete_credentials_start_is_rejected_without_storing_session() {
 			"malformed start stored a session"
 		);
 		assert_eq!(login.poll_interval(), None);
+		assert_eq!(login.started_steam_id(), None);
 		transport.assert_finished();
 	}
 }
@@ -476,6 +479,7 @@ fn poll_interval_comes_from_steam() {
 		);
 		assert_redacted(&error, "challenge-url-canary");
 		assert_eq!(login.poll_interval(), None);
+		assert_eq!(login.started_steam_id(), None);
 		transport.assert_finished();
 	}
 }
@@ -548,7 +552,7 @@ fn poll_until_tokens_is_built_on_poll_once() {
 	assert!(
 		matches!(
 			error.downcast_ref::<LoginError>(),
-			Some(LoginError::SessionExpired)
+			Some(LoginError::SessionExpired(EResult::Expired))
 		),
 		"sensitive assertion failed"
 	);
@@ -587,16 +591,17 @@ fn poll_once_maps_errors() {
 			};
 			let (mut login, transport) = started_login(Some(5.0), steps);
 			let error = login.poll_once().unwrap_err();
+			assert!(error.eresult() == Some(result), "Steam result was lost");
 			match result {
 				EResult::Expired | EResult::FileNotFound => {
 					assert!(
-						matches!(error, LoginError::SessionExpired),
+						matches!(error, LoginError::SessionExpired(value) if value == result),
 						"sensitive assertion failed"
 					)
 				}
 				EResult::RateLimitExceeded | EResult::AccountLoginDeniedThrottle => {
 					assert!(
-						matches!(error, LoginError::TooManyAttempts),
+						matches!(error, LoginError::TooManyAttempts(value) if value == result),
 						"sensitive assertion failed"
 					)
 				}
@@ -823,6 +828,202 @@ fn upstream_public_names_remain_available() {
 		assert!(
 			include_str!("../src/lib.rs").contains(export),
 			"upstream re-export removed"
+		);
+	}
+}
+
+fn credentials_steps(result: EResult, steam_id: u64) -> Vec<Step> {
+	let mut rsa = RsaResponse::new();
+	rsa.set_publickey_exp("010001".to_owned());
+	rsa.set_publickey_mod("ff".repeat(128));
+	rsa.set_timestamp(1);
+	let mut response = CredentialsResponse::new();
+	response.set_client_id(123);
+	response.set_request_id(b"request-id-canary".to_vec());
+	response.set_steamid(steam_id);
+	response.set_extended_error_message("extended-error-message-canary".to_owned());
+	vec![
+		Step::response::<RsaRequest, _>(EResult::OK, rsa),
+		Step::response::<CredentialsRequest, _>(result, response),
+	]
+}
+
+#[test]
+fn started_steam_id_exposes_credentials_subject_before_code_or_poll() {
+	let (mut login, transport) = new_login(credentials_steps(EResult::OK, 76561198000000001));
+	assert_eq!(login.started_steam_id(), None);
+	login
+		.begin_auth_via_credentials("synthetic-account", "password-canary")
+		.unwrap();
+	assert_eq!(login.started_steam_id(), Some(76561198000000001));
+	// No submit/poll is scripted: the accessor must not make another request.
+	assert_eq!(login.started_steam_id(), Some(76561198000000001));
+	transport.assert_finished();
+}
+
+#[test]
+fn started_steam_id_is_none_without_auth_or_for_qr() {
+	let (login, transport) = new_login(vec![]);
+	assert_eq!(login.started_steam_id(), None);
+	transport.assert_finished();
+	let (login, transport) = started_login(None, vec![]);
+	assert_eq!(login.started_steam_id(), None);
+	transport.assert_finished();
+}
+
+#[test]
+fn login_eresult_preserves_curated_variants_and_redacts_server_messages() {
+	for (result, expected) in [
+		(
+			EResult::RateLimitExceeded,
+			LoginError::TooManyAttempts(EResult::RateLimitExceeded),
+		),
+		(
+			EResult::AccountLoginDeniedThrottle,
+			LoginError::TooManyAttempts(EResult::AccountLoginDeniedThrottle),
+		),
+		(
+			EResult::Expired,
+			LoginError::SessionExpired(EResult::Expired),
+		),
+		(
+			EResult::FileNotFound,
+			LoginError::SessionExpired(EResult::FileNotFound),
+		),
+		(EResult::InvalidPassword, LoginError::BadCredentials),
+		(
+			EResult::TwoFactorCodeMismatch,
+			LoginError::UnknownEResult(EResult::TwoFactorCodeMismatch),
+		),
+		(
+			EResult::DuplicateRequest,
+			LoginError::UnknownEResult(EResult::DuplicateRequest),
+		),
+		(
+			EResult::AccessDenied,
+			LoginError::UnknownEResult(EResult::AccessDenied),
+		),
+		(
+			EResult::Unknown(987654),
+			LoginError::UnknownEResult(EResult::Unknown(987654)),
+		),
+	] {
+		let (mut login, transport) = new_login(credentials_steps(result, 76561198000000001));
+		let error = login
+			.begin_auth_via_credentials("synthetic-account", "password-canary")
+			.unwrap_err();
+		for error in [error, LoginError::from(result)] {
+			assert!(error.eresult() == Some(result), "Steam result was lost");
+			assert!(
+				std::mem::discriminant(&error) == std::mem::discriminant(&expected),
+				"curated variant changed"
+			);
+			assert_redacted(&error, "extended-error-message-canary");
+		}
+		assert_eq!(login.started_steam_id(), None);
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn update_auth_eresult_preserves_curated_variants_and_redacts_server_messages() {
+	for (result, expected) in [
+		(
+			EResult::RateLimitExceeded,
+			UpdateAuthSessionError::TooManyAttempts(EResult::RateLimitExceeded),
+		),
+		(
+			EResult::AccountLoginDeniedThrottle,
+			UpdateAuthSessionError::TooManyAttempts(EResult::AccountLoginDeniedThrottle),
+		),
+		(
+			EResult::Expired,
+			UpdateAuthSessionError::SessionExpired(EResult::Expired),
+		),
+		(
+			EResult::FileNotFound,
+			UpdateAuthSessionError::SessionExpired(EResult::FileNotFound),
+		),
+		(
+			EResult::TwoFactorCodeMismatch,
+			UpdateAuthSessionError::IncorrectSteamGuardCode,
+		),
+		(
+			EResult::DuplicateRequest,
+			UpdateAuthSessionError::DuplicateRequest,
+		),
+		(
+			EResult::InvalidPassword,
+			UpdateAuthSessionError::UnknownEResult(EResult::InvalidPassword),
+		),
+		(
+			EResult::AccessDenied,
+			UpdateAuthSessionError::UnknownEResult(EResult::AccessDenied),
+		),
+		(
+			EResult::Unknown(987654),
+			UpdateAuthSessionError::UnknownEResult(EResult::Unknown(987654)),
+		),
+	] {
+		let mut steps = credentials_steps(EResult::OK, 76561198000000001);
+		steps.push(Step::response::<UpdateRequest, _>(
+			result,
+			UpdateResponse::new(),
+		));
+		let (mut login, transport) = new_login(steps);
+		login
+			.begin_auth_via_credentials("synthetic-account", "password-canary")
+			.unwrap();
+		let error = login
+			.submit_steam_guard_code(
+				EAuthSessionGuardType::k_EAuthSessionGuardType_DeviceCode,
+				"guard-code-canary".to_owned(),
+			)
+			.unwrap_err();
+		for error in [error, UpdateAuthSessionError::from(result)] {
+			assert!(error.eresult() == Some(result), "Steam result was lost");
+			assert!(
+				std::mem::discriminant(&error) == std::mem::discriminant(&expected),
+				"curated variant changed"
+			);
+			assert_redacted(&error, "extended-error-message-canary");
+		}
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn login_and_update_local_and_transport_errors_have_no_eresult() {
+	// Building an invalid URL fails without DNS or sockets.
+	let network = || {
+		reqwest::blocking::Client::new()
+			.get("invalid-url")
+			.build()
+			.unwrap_err()
+	};
+	for error in [
+		LoginError::SessionNotStarted,
+		LoginError::AuthAlreadyStarted,
+		LoginError::UnknownOutcome,
+		LoginError::TransportError(TransportError::Unauthorized),
+		LoginError::NetworkFailure(network().into()),
+		LoginError::OtherFailure(anyhow::anyhow!("other-failure-canary")),
+	] {
+		assert!(
+			error.eresult().is_none(),
+			"non-Steam error has a Steam result"
+		);
+	}
+	for error in [
+		UpdateAuthSessionError::SessionNotStarted,
+		UpdateAuthSessionError::InvalidGuardType,
+		UpdateAuthSessionError::TransportError(TransportError::Unauthorized),
+		UpdateAuthSessionError::NetworkFailure(network().into()),
+		UpdateAuthSessionError::OtherFailure(anyhow::anyhow!("other-failure-canary")),
+	] {
+		assert!(
+			error.eresult().is_none(),
+			"non-Steam error has a Steam result"
 		);
 	}
 }

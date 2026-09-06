@@ -25,8 +25,8 @@ use std::{fmt, time::Duration};
 
 pub enum LoginError {
 	BadCredentials,
-	TooManyAttempts,
-	SessionExpired,
+	TooManyAttempts(EResult),
+	SessionExpired(EResult),
 	SessionNotStarted,
 	UnknownEResult(EResult),
 	/// Steam returned an incomplete session/token response or an unsupported login outcome.
@@ -37,12 +37,33 @@ pub enum LoginError {
 	OtherFailure(anyhow::Error),
 }
 
+impl LoginError {
+	/// Returns the exact Steam result for an EResult-derived error.
+	/// Transport failures (including HTTP 401) and local errors return `None`.
+	pub fn eresult(&self) -> Option<EResult> {
+		match self {
+			Self::BadCredentials => Some(EResult::InvalidPassword),
+			Self::TooManyAttempts(result)
+			| Self::SessionExpired(result)
+			| Self::UnknownEResult(result) => Some(*result),
+			Self::SessionNotStarted
+			| Self::UnknownOutcome
+			| Self::AuthAlreadyStarted
+			| Self::TransportError(_)
+			| Self::NetworkFailure(_)
+			| Self::OtherFailure(_) => None,
+		}
+	}
+}
+
 impl fmt::Debug for LoginError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::BadCredentials => f.write_str("BadCredentials"),
-			Self::TooManyAttempts => f.write_str("TooManyAttempts"),
-			Self::SessionExpired => f.write_str("SessionExpired"),
+			Self::TooManyAttempts(result) => {
+				f.debug_tuple("TooManyAttempts").field(result).finish()
+			}
+			Self::SessionExpired(result) => f.debug_tuple("SessionExpired").field(result).finish(),
 			Self::SessionNotStarted => f.write_str("SessionNotStarted"),
 			Self::UnknownOutcome => f.write_str("UnknownOutcome"),
 			Self::AuthAlreadyStarted => f.write_str("AuthAlreadyStarted"),
@@ -100,10 +121,10 @@ impl From<EResult> for LoginError {
 		match err {
 			EResult::InvalidPassword => LoginError::BadCredentials,
 			EResult::RateLimitExceeded | EResult::AccountLoginDeniedThrottle => {
-				LoginError::TooManyAttempts
+				LoginError::TooManyAttempts(err)
 			}
 			// Steam also reports a missing/expired polling session as FileNotFound.
-			EResult::Expired | EResult::FileNotFound => LoginError::SessionExpired,
+			EResult::Expired | EResult::FileNotFound => LoginError::SessionExpired(err),
 			err => LoginError::UnknownEResult(err),
 		}
 	}
@@ -187,6 +208,17 @@ where
 			client: AuthenticationClient::new(transport),
 			device_details,
 			started_auth: None,
+		}
+	}
+
+	/// Returns the Steam ID reported by a successful credentials begin-auth response.
+	/// Returns `None` before auth starts or for QR auth. Consumers such as SGM T-43
+	/// can compare this subject with a known account before submitting a code or polling.
+	/// This is the begin-auth subject, not proof that authentication has completed.
+	pub fn started_steam_id(&self) -> Option<u64> {
+		match self.started_auth.as_ref() {
+			Some(StartAuth::BeginAuthSessionViaCredentials(resp)) => Some(resp.steamid()),
+			Some(StartAuth::BeginAuthSessionViaQR(_)) | None => None,
 		}
 	}
 
@@ -526,8 +558,8 @@ impl From<DeviceDetails> for CAuthentication_DeviceDetails {
 pub enum UpdateAuthSessionError {
 	SessionNotStarted,
 	InvalidGuardType,
-	TooManyAttempts,
-	SessionExpired,
+	TooManyAttempts(EResult),
+	SessionExpired(EResult),
 	IncorrectSteamGuardCode,
 	/// This login session already was approved somewhere else. Polling should give you the tokens.
 	DuplicateRequest,
@@ -537,13 +569,34 @@ pub enum UpdateAuthSessionError {
 	OtherFailure(anyhow::Error),
 }
 
+impl UpdateAuthSessionError {
+	/// Returns the exact Steam result for an EResult-derived error.
+	/// Transport failures (including HTTP 401) and local errors return `None`.
+	pub fn eresult(&self) -> Option<EResult> {
+		match self {
+			Self::IncorrectSteamGuardCode => Some(EResult::TwoFactorCodeMismatch),
+			Self::DuplicateRequest => Some(EResult::DuplicateRequest),
+			Self::TooManyAttempts(result)
+			| Self::SessionExpired(result)
+			| Self::UnknownEResult(result) => Some(*result),
+			Self::SessionNotStarted
+			| Self::InvalidGuardType
+			| Self::TransportError(_)
+			| Self::NetworkFailure(_)
+			| Self::OtherFailure(_) => None,
+		}
+	}
+}
+
 impl fmt::Debug for UpdateAuthSessionError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
 			Self::SessionNotStarted => f.write_str("SessionNotStarted"),
 			Self::InvalidGuardType => f.write_str("InvalidGuardType"),
-			Self::TooManyAttempts => f.write_str("TooManyAttempts"),
-			Self::SessionExpired => f.write_str("SessionExpired"),
+			Self::TooManyAttempts(result) => {
+				f.debug_tuple("TooManyAttempts").field(result).finish()
+			}
+			Self::SessionExpired(result) => f.debug_tuple("SessionExpired").field(result).finish(),
 			Self::IncorrectSteamGuardCode => f.write_str("IncorrectSteamGuardCode"),
 			Self::DuplicateRequest => f.write_str("DuplicateRequest"),
 			Self::UnknownEResult(result) => f.debug_tuple("UnknownEResult").field(result).finish(),
@@ -574,8 +627,10 @@ impl std::error::Error for UpdateAuthSessionError {
 impl From<EResult> for UpdateAuthSessionError {
 	fn from(err: EResult) -> Self {
 		match err {
-			EResult::RateLimitExceeded => UpdateAuthSessionError::TooManyAttempts,
-			EResult::Expired => UpdateAuthSessionError::SessionExpired,
+			EResult::RateLimitExceeded | EResult::AccountLoginDeniedThrottle => {
+				UpdateAuthSessionError::TooManyAttempts(err)
+			}
+			EResult::Expired | EResult::FileNotFound => UpdateAuthSessionError::SessionExpired(err),
 			EResult::TwoFactorCodeMismatch => UpdateAuthSessionError::IncorrectSteamGuardCode,
 			EResult::DuplicateRequest => UpdateAuthSessionError::DuplicateRequest,
 			_ => UpdateAuthSessionError::UnknownEResult(err),

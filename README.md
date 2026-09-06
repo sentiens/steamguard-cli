@@ -109,3 +109,22 @@ By contributing code to this project, you give me and any future maintainers a n
 # Used By
 
 * [Unreal Engine to Steam publishing CI/CD pipeline](https://github.com/kasp1/dozer-pipelines), a sample pipeline built for [Dozer](https://github.com/kasp1/Dozer), a simple CI/CD runner
+
+## SGM fork — E4-FORK-04
+
+SGM T-43 consumes two typed login APIs at pin-04. `LoginError::eresult()` and
+`userlogin::UpdateAuthSessionError::eresult()` return `Option<EResult>` with the
+exact Steam result (numeric value via `.code()`). Both errors now retain their
+curated `TooManyAttempts(EResult)` and `SessionExpired(EResult)` variants, including
+throttle and missing-session aliases. Consumers must update unit-variant matches
+to tuple patterns. Transport and local errors return `None`; raw Steam messages
+are excluded from these errors' Display/Debug output. This closes T-43/C07.
+
+`UserLogin::started_steam_id(&self) -> Option<u64>` exposes the successful
+credentials begin-auth response's subject before code submission or polling,
+allowing SGM to compare it against a known account for T-43/IDENTITY. It returns
+`None` before begin or for QR auth. This subject is not completed authentication;
+consumers must still validate the subjects of the final tokens.
+
+An `EResult::Unauthorized` variant is out of scope: Steam has no such EResult.
+HTTP 401 remains `TransportError::Unauthorized`.
