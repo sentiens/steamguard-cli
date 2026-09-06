@@ -66,7 +66,7 @@ fn check_connect(
 	assert_eq!(hostname, TARGET);
 	assert_eq!(received_port, port);
 	assert!(
-		error.kind() == NetworkErrorKind::Connection && error.sent() == RequestSent::No,
+		error.kind() == NetworkErrorKind::ProxyConnect && error.sent() == RequestSent::No,
 		"expected the sink's SOCKS connection rejection"
 	);
 }

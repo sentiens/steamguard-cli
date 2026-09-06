@@ -14,6 +14,57 @@ use crate::{
 	steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult},
 };
 
+/// Records local DNS requests and refuses every resolution, without querying DNS.
+///
+/// Clones share the recording. Literal IP addresses bypass reqwest's resolver and can
+/// still connect; use a loopback proxy stand when testing remote destination resolution.
+#[cfg(feature = "test-endpoints")]
+#[derive(Clone, Default)]
+pub struct RecordingResolver {
+	names: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[cfg(feature = "test-endpoints")]
+impl RecordingResolver {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	/// Returns a snapshot in lookup order. This deliberately exposes recorded hostnames.
+	pub fn names(&self) -> Vec<String> {
+		self.names.lock().unwrap().clone()
+	}
+}
+
+#[cfg(feature = "test-endpoints")]
+impl fmt::Debug for RecordingResolver {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("RecordingResolver")
+			.field("names", &"[REDACTED]")
+			.finish()
+	}
+}
+
+#[cfg(feature = "test-endpoints")]
+impl reqwest::dns::Resolve for RecordingResolver {
+	fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+		self.names.lock().unwrap().push(name.as_str().to_owned());
+		Box::pin(std::future::ready(Err(Box::new(std::io::Error::other(
+			"test resolver refused resolution",
+		)) as _)))
+	}
+}
+
+#[cfg(feature = "test-endpoints")]
+struct TestResolver(std::sync::Arc<dyn reqwest::dns::Resolve>);
+
+#[cfg(feature = "test-endpoints")]
+impl reqwest::dns::Resolve for TestResolver {
+	fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+		self.0.resolve(name)
+	}
+}
+
 #[derive(Clone)]
 pub struct WebApiTransport {
 	client: reqwest::blocking::Client,
@@ -42,7 +93,27 @@ impl WebApiTransport {
 	/// [`WebApiTransport::new`] to retain the existing client construction behavior when no proxy is
 	/// required.
 	pub fn new_with_proxy(proxy: &ProxyConfig) -> Result<Self, ProxyTransportError> {
-		Self::from_proxy_client(Self::proxy_client_builder(proxy)?.build())
+		let builder = Self::proxy_client_builder(proxy)?;
+		#[cfg(feature = "test-endpoints")]
+		let builder = match &proxy.test_resolver {
+			Some(resolver) => builder.dns_resolver(std::sync::Arc::new(TestResolver(
+				std::sync::Arc::clone(resolver),
+			))),
+			None => builder,
+		};
+		Self::from_proxy_client(builder.build())
+	}
+
+	/// Installs a recording, always-failing resolver on the approved proxy factory path.
+	///
+	/// HTTP, HTTPS and socks5h proxies resolve destination names remotely. Named proxy
+	/// hosts are resolved locally and will fail here. Literal proxy IPs can still connect.
+	#[cfg(feature = "test-endpoints")]
+	pub fn new_with_proxy_and_recording_resolver(
+		proxy: &ProxyConfig,
+		resolver: &RecordingResolver,
+	) -> Result<Self, ProxyTransportError> {
+		Self::new_with_proxy_and_test_resolver(proxy, std::sync::Arc::new(resolver.clone()))
 	}
 
 	/// Constructs the approved proxy client with a resolver spy for offline tests.
@@ -53,14 +124,12 @@ impl WebApiTransport {
 		proxy: &ProxyConfig,
 		resolver: std::sync::Arc<R>,
 	) -> Result<Self, ProxyTransportError> {
-		Self::from_proxy_client(
-			Self::proxy_client_builder(proxy)?
-				.dns_resolver(resolver)
-				.build(),
-		)
+		let mut proxy = proxy.clone();
+		proxy.test_resolver = Some(resolver);
+		Self::new_with_proxy(&proxy)
 	}
 
-	// The single reviewed construction policy for both proxy entry points.
+	// The single reviewed construction policy for all proxy entry points.
 	fn proxy_client_builder(
 		proxy: &ProxyConfig,
 	) -> Result<reqwest::blocking::ClientBuilder, ProxyTransportError> {
@@ -360,7 +429,7 @@ pub enum WebEndpoint<'a> {
 	ConfirmationAction,
 	ConfirmationBulkAction,
 	ConfirmationDetails(&'a str),
-	#[cfg(test)]
+	#[cfg(any(test, feature = "test-endpoints"))]
 	Test(&'a str),
 }
 
@@ -371,7 +440,7 @@ impl WebEndpoint<'_> {
 			Self::ConfirmationAction => "confirmation-action",
 			Self::ConfirmationBulkAction => "confirmation-bulk-action",
 			Self::ConfirmationDetails(_) => "confirmation-details",
-			#[cfg(test)]
+			#[cfg(any(test, feature = "test-endpoints"))]
 			Self::Test(_) => "test",
 		}
 	}
@@ -393,7 +462,7 @@ impl WebEndpoint<'_> {
 					.push(id);
 				Ok(url)
 			}
-			#[cfg(test)]
+			#[cfg(any(test, feature = "test-endpoints"))]
 			Self::Test(url) => Url::parse(url).map_err(|_| NetworkError::invalid_request()),
 		}
 	}

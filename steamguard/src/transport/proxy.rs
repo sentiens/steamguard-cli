@@ -11,6 +11,8 @@ use secrecy::{ExposeSecret, SecretString};
 pub struct ProxyConfig {
 	url: Url,
 	credentials: Option<ProxyCredentials>,
+	#[cfg(feature = "test-endpoints")]
+	pub(crate) test_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
 }
 
 #[derive(Clone)]
@@ -58,6 +60,8 @@ impl ProxyConfig {
 		Ok(Self {
 			url,
 			credentials: None,
+			#[cfg(feature = "test-endpoints")]
+			test_resolver: None,
 		})
 	}
 

@@ -189,14 +189,25 @@ fn proxied_client_uses_only_pinned_webpki_roots() {
 	);
 	assert_eq!(
 		compact_function(source, "pub fn new_with_proxy("),
-		"{Self::from_proxy_client(Self::proxy_client_builder(proxy)?.build())}"
+		concat!(
+			"{letbuilder=Self::proxy_client_builder(proxy)?;",
+			"#[cfg(feature=\"test-endpoints\")]",
+			"letbuilder=match&proxy.test_resolver{",
+			"Some(resolver)=>builder.dns_resolver(std::sync::Arc::new(TestResolver(",
+			"std::sync::Arc::clone(resolver),))),None=>builder,};",
+			"Self::from_proxy_client(builder.build())}"
+		)
 	);
 	assert_eq!(
 		compact_function(source, "pub fn new_with_proxy_and_test_resolver<"),
 		concat!(
-			"{Self::from_proxy_client(",
-			"Self::proxy_client_builder(proxy)?.dns_resolver(resolver).build(),)}"
+			"{letmutproxy=proxy.clone();proxy.test_resolver=Some(resolver);",
+			"Self::new_with_proxy(&proxy)}"
 		)
+	);
+	assert_eq!(
+		compact_function(source, "pub fn new_with_proxy_and_recording_resolver("),
+		"{Self::new_with_proxy_and_test_resolver(proxy,std::sync::Arc::new(resolver.clone()))}"
 	);
 	assert!(
 		compact_function(source, "fn from_proxy_client(")

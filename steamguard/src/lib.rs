@@ -31,6 +31,16 @@ pub mod token;
 pub mod transport;
 pub mod userlogin;
 
+/// Offline transport test helpers; consumers do not need a direct reqwest dependency.
+#[cfg(feature = "test-endpoints")]
+pub mod test_support {
+	pub use crate::transport::webapi::RecordingResolver;
+	pub use crate::transport::{
+		NetworkError, NetworkErrorKind, ProxyConfig, ProxyConfigError, ProxyTransportError,
+		RequestSent, Transport, WebApiTransport, WebEndpoint, WebRequest, WebResponse,
+	};
+}
+
 extern crate base64;
 extern crate cookie;
 

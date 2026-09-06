@@ -354,7 +354,7 @@ fn approved_connection_refusal_preserves_no_send_proof() {
 		error_facts(&error)
 	);
 	assert!(
-		(error.kind()) == (NetworkErrorKind::Connection),
+		(error.kind()) == (NetworkErrorKind::ProxyConnect),
 		"test invariant failed"
 	);
 	assert!(

@@ -12,6 +12,12 @@ use reqwest::{
 pub enum NetworkErrorKind {
 	Timeout,
 	Connection,
+	/// The proxy rejected credentials or required authentication.
+	/// Reserved until the HTTP stack exposes a public typed authentication cause.
+	ProxyAuth,
+	/// Connection establishment on the approved proxy route failed.
+	/// Includes opaque SOCKS authentication failures in the pinned HTTP stack.
+	ProxyConnect,
 	Tls,
 	HttpStatus,
 	Redirect,
@@ -75,6 +81,15 @@ impl NetworkError {
 		let mut error = Self::from(source);
 		if before_request {
 			error.sent = RequestSent::No;
+			// This route always uses an explicit proxy. reqwest::Error::is_connect()
+			// identifies connector-stage failure, before the connector supplies a stream
+			// for origin HTTP bytes. No redirects/retries can hide an earlier send.
+			// Preserve typed timeout/TLS evidence. hyper-util 0.1.20's SocksError and
+			// TunnelError are private; SocksError also has no source() implementation.
+			// Auth cannot be distinguished from other handshake failures without text.
+			if error.kind == NetworkErrorKind::Connection {
+				error.kind = NetworkErrorKind::ProxyConnect;
+			}
 		}
 		error
 	}
@@ -183,6 +198,8 @@ impl fmt::Display for NetworkError {
 		match (self.kind, self.status) {
 			(NetworkErrorKind::Timeout, _) => f.write_str("network request timed out"),
 			(NetworkErrorKind::Connection, _) => f.write_str("connection failed"),
+			(NetworkErrorKind::ProxyAuth, _) => f.write_str("proxy authentication failed"),
+			(NetworkErrorKind::ProxyConnect, _) => f.write_str("proxy connection failed"),
 			(NetworkErrorKind::Tls, _) => f.write_str("TLS negotiation failed"),
 			(NetworkErrorKind::HttpStatus, Some(status)) => {
 				write!(f, "server returned HTTP status {status}")
@@ -351,6 +368,8 @@ mod tests {
 		for kind in [
 			NetworkErrorKind::Timeout,
 			NetworkErrorKind::Connection,
+			NetworkErrorKind::ProxyAuth,
+			NetworkErrorKind::ProxyConnect,
 			NetworkErrorKind::Tls,
 			NetworkErrorKind::HttpStatus,
 			NetworkErrorKind::Redirect,
