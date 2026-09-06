@@ -34,8 +34,9 @@ fn wire_response(result: EResult, data: impl Message) -> Vec<u8> {
 fn loopback_begin_subject_and_exact_eresults_redact_wire_messages() {
 	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 	listener.set_nonblocking(true).unwrap();
+	// IAuthenticationService uses the login endpoint, independently of the API endpoint.
 	std::env::set_var(
-		"STEAMGUARD_API_BASE_URL",
+		"STEAMGUARD_LOGIN_BASE_URL",
 		format!("http://{}", listener.local_addr().unwrap()),
 	);
 	let mut rsa = RsaResponse::new();
