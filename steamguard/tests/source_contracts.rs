@@ -8,11 +8,7 @@ fn attributes(source: &str, name: &str) -> String {
 	);
 	let regex = Regex::new(&pattern).unwrap();
 	let matches: Vec<_> = regex.captures_iter(source).collect();
-	assert_eq!(
-		matches.len(),
-		1,
-		"missing or ambiguous declaration for {name}"
-	);
+	assert!((matches.len()) == (1), "test invariant failed");
 	matches[0][1].to_owned()
 }
 
@@ -87,7 +83,7 @@ fn derived_debug_is_absent_where_secrets_live() {
 		for name in names {
 			assert!(
 				!derives_debug.is_match(&attributes(source, name)),
-				"derived Debug on {name}"
+				"test invariant failed"
 			);
 		}
 	}
@@ -96,12 +92,18 @@ fn derived_debug_is_absent_where_secrets_live() {
 		"#[derive(Clone,\nDebug)]\n/// docs\n#[serde(transparent)]\npub(crate) struct Secret;",
 		"#[cfg_attr(test, derive(Debug))]\nstruct Secret;",
 	] {
-		assert!(derives_debug.is_match(&attributes(source, "Secret")));
+		assert!(
+			derives_debug.is_match(&attributes(source, "Secret")),
+			"sensitive assertion failed"
+		);
 	}
-	assert!(!derives_debug.is_match(&attributes(
-		"#[derive(Clone)] struct Secret; #[derive(Debug)] struct Public;",
-		"Secret"
-	)));
+	assert!(
+		!derives_debug.is_match(&attributes(
+			"#[derive(Clone)] struct Secret; #[derive(Debug)] struct Public;",
+			"Secret"
+		)),
+		"sensitive assertion failed"
+	);
 }
 
 #[test]
@@ -125,10 +127,9 @@ fn timeouts_are_10s_connect_30s_total() {
 		".tls_built_in_root_certs(false).tls_built_in_webpki_certs(true)",
 		".cookie_store(false)",
 	] {
-		assert_eq!(
-			compact.matches(required).count(),
-			1,
-			"missing or duplicate setting: {required}"
+		assert!(
+			(compact.matches(required).count()) == (1),
+			"test invariant failed"
 		);
 	}
 	assert_eq!(compact.matches("Client::builder()").count(), 1);
@@ -148,18 +149,21 @@ fn timeouts_are_10s_connect_30s_total() {
 fn upstream_convenience_methods_remain_available() {
 	use steamguard::token::{SteamJwtData, TwoFactorSecret};
 	let constructor: fn(Vec<u8>) -> TwoFactorSecret = TwoFactorSecret::from_bytes;
-	assert_eq!(constructor(vec![0; 20]).expose_secret(), &[0; 20]);
+	assert!(
+		(constructor(vec![0; 20]).expose_secret()) == (&[0; 20]),
+		"sensitive assertion failed"
+	);
 	assert!(std::panic::catch_unwind(|| constructor(vec![0; 19])).is_err());
 	let steam_id: fn(&SteamJwtData) -> u64 = SteamJwtData::steam_id;
-	assert_eq!(
-		steam_id(&SteamJwtData {
+	assert!(
+		(steam_id(&SteamJwtData {
 			exp: 1,
 			iat: 1,
 			iss: String::new(),
 			aud: vec![],
 			sub: "123".into(),
 			jti: String::new()
-		}),
-		123
+		})) == (123),
+		"sensitive assertion failed"
 	);
 }

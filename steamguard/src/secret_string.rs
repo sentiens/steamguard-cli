@@ -38,12 +38,18 @@ mod test {
 
 		let s = serde_json::to_string(&foo).unwrap();
 		let foo2: Foo = serde_json::from_str(&s).unwrap();
-		assert_eq!(foo.secret.expose_secret(), foo2.secret.expose_secret());
+		assert!(
+			(foo.secret.expose_secret()) == (foo2.secret.expose_secret()),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
 	fn test_secret_string_deserialize() {
 		let foo: Foo = serde_json::from_str("{\"secret\": \"hello\"}").unwrap();
-		assert_eq!(foo.secret.expose_secret(), "hello");
+		assert!(
+			(foo.secret.expose_secret()) == ("hello"),
+			"sensitive assertion failed"
+		);
 	}
 }

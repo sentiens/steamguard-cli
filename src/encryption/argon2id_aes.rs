@@ -116,25 +116,25 @@ mod tests {
 
 	#[test]
 	fn test_encryption_key() {
-		assert_eq!(
-			base64::engine::general_purpose::STANDARD.encode(
+		assert!(
+			(base64::engine::general_purpose::STANDARD.encode(
 				Argon2idAes256::get_encryption_key("password", "GMhL0N2hqXg=")
 					.unwrap()
 					.as_slice()
-			),
-			"DTm3hc95aKyAGmyVMZdLUPfcPjcXN1i1zYObYJg2GzY="
+			)) == ("DTm3hc95aKyAGmyVMZdLUPfcPjcXN1i1zYObYJg2GzY="),
+			"sensitive assertion failed"
 		);
 	}
 
 	#[test]
 	fn test_encryption_key2() {
-		assert_eq!(
-			base64::engine::general_purpose::STANDARD.encode(
+		assert!(
+			(base64::engine::general_purpose::STANDARD.encode(
 				Argon2idAes256::get_encryption_key("password", "wTzTE9A6aN8=")
 					.unwrap()
 					.as_slice()
-			),
-			"zwMjXhwggpJWCvkouG/xrSPZRWn2cUUyph3PAViRONA="
+			)) == ("zwMjXhwggpJWCvkouG/xrSPZRWn2cUUyph3PAViRONA="),
+			"sensitive assertion failed"
 		);
 	}
 
@@ -150,11 +150,10 @@ mod tests {
 		let passkey = "password";
 		let scheme = Argon2idAes256::generate();
 		for case in cases {
-			eprintln!("testing case: {} (len {})", case, case.len());
 			let orig = case.as_bytes().to_vec();
 			let encrypted = scheme.encrypt(passkey, orig.clone()).unwrap();
 			let result = scheme.decrypt(passkey, encrypted).unwrap();
-			assert_eq!(orig, result.to_vec());
+			assert!((orig) == (result.to_vec()), "sensitive assertion failed");
 		}
 		Ok(())
 	}

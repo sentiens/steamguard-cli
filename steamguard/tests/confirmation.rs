@@ -165,7 +165,10 @@ fn malformed_confirmation_details_anyhow_diagnostics_are_redacted() {
 	] {
 		assert_safe_text(&output);
 	}
-	assert!(error.downcast_ref::<ConfirmerError>().is_some());
+	assert!(
+		error.downcast_ref::<ConfirmerError>().is_some(),
+		"sensitive assertion failed"
+	);
 	transport.assert_finished();
 }
 
@@ -273,43 +276,44 @@ fn object_confirmation_duplicate_fields_remain_rejected() {
 #[test]
 fn well_formed_list_is_parsed() {
 	let confirmations = get_list(COMPLETE).unwrap();
-	assert_eq!(
-		confirmations,
-		vec![
-			Confirmation {
-				conf_type: ConfirmationType::Trade,
-				type_name: "Trade".to_owned(),
-				id: "10000000001".to_owned(),
-				creator_id: "20000000002".to_owned(),
-				nonce: "30000000003".to_owned(),
-				creation_time: 1700000000,
-				cancel: "Cancel".to_owned(),
-				accept: "Accept".to_owned(),
-				icon: None,
-				multi: false,
-				headline: "Trade confirmation".to_owned(),
-				summary: vec![
-					"Synthetic fixture".to_owned(),
-					"One item offered".to_owned()
-				],
-				warn: Some("Verify the recipient".to_owned()),
-			},
-			Confirmation {
-				conf_type: ConfirmationType::MarketSell,
-				type_name: "Market listing".to_owned(),
-				id: "10000000002".to_owned(),
-				creator_id: "20000000003".to_owned(),
-				nonce: "30000000004".to_owned(),
-				creation_time: 1700000060,
-				cancel: "Cancel listing".to_owned(),
-				accept: "Create listing".to_owned(),
-				icon: Some("https://example.invalid/synthetic-item.png".to_owned()),
-				multi: true,
-				headline: "Market confirmation".to_owned(),
-				summary: vec!["Synthetic market item".to_owned(), "Price: 1.00".to_owned()],
-				warn: None,
-			},
-		]
+	assert!(
+		(confirmations)
+			== (vec![
+				Confirmation {
+					conf_type: ConfirmationType::Trade,
+					type_name: "Trade".to_owned(),
+					id: "10000000001".to_owned(),
+					creator_id: "20000000002".to_owned(),
+					nonce: "30000000003".to_owned(),
+					creation_time: 1700000000,
+					cancel: "Cancel".to_owned(),
+					accept: "Accept".to_owned(),
+					icon: None,
+					multi: false,
+					headline: "Trade confirmation".to_owned(),
+					summary: vec![
+						"Synthetic fixture".to_owned(),
+						"One item offered".to_owned()
+					],
+					warn: Some("Verify the recipient".to_owned()),
+				},
+				Confirmation {
+					conf_type: ConfirmationType::MarketSell,
+					type_name: "Market listing".to_owned(),
+					id: "10000000002".to_owned(),
+					creator_id: "20000000003".to_owned(),
+					nonce: "30000000004".to_owned(),
+					creation_time: 1700000060,
+					cancel: "Cancel listing".to_owned(),
+					accept: "Create listing".to_owned(),
+					icon: Some("https://example.invalid/synthetic-item.png".to_owned()),
+					multi: true,
+					headline: "Market confirmation".to_owned(),
+					summary: vec!["Synthetic market item".to_owned(), "Price: 1.00".to_owned()],
+					warn: None,
+				},
+			]),
+		"sensitive assertion failed"
 	);
 }
 
@@ -328,7 +332,10 @@ fn successful_but_truncated_list_is_rejected() {
 		r#"{"success":true,"conf":[],"success":false}"#,
 	] {
 		let error = get_list(body).unwrap_err();
-		assert!(matches!(error, ConfirmerError::DeserializeError(_)));
+		assert!(
+			matches!(error, ConfirmerError::DeserializeError(_)),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 	}
 	let minimal: serde_json::Value = serde_json::from_str(MINIMAL).unwrap();
@@ -350,7 +357,7 @@ fn successful_but_truncated_list_is_rejected() {
 				get_list(body.to_string()),
 				Err(ConfirmerError::DeserializeError(_))
 			),
-			"missing required field: {required}"
+			"sensitive assertion failed"
 		);
 	}
 	for (field, invalid) in [
@@ -370,7 +377,10 @@ fn successful_but_truncated_list_is_rejected() {
 		let mut body = minimal.clone();
 		body["conf"][0][field] = invalid;
 		let error = get_list(body.to_string()).unwrap_err();
-		assert!(matches!(error, ConfirmerError::DeserializeError(_)));
+		assert!(
+			matches!(error, ConfirmerError::DeserializeError(_)),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 	}
 	assert!(get_list(r#"{"success":true,"conf":[]}"#)
@@ -397,9 +407,9 @@ fn unknown_confirmation_type_is_preserved() {
 	for code in [0, u32::MAX] {
 		let mut body: serde_json::Value = serde_json::from_str(MINIMAL).unwrap();
 		body["conf"][0]["type"] = json!(code);
-		assert_eq!(
-			get_list(body.to_string()).unwrap()[0].conf_type,
-			ConfirmationType::Unknown(code)
+		assert!(
+			(get_list(body.to_string()).unwrap()[0].conf_type) == (ConfirmationType::Unknown(code)),
+			"sensitive assertion failed"
 		);
 	}
 }
@@ -513,7 +523,7 @@ fn confirmation_debug_redacts_nonce() {
 		format!("{from:?}"),
 	] {
 		assert_safe_text(&output);
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 }
 
@@ -533,8 +543,8 @@ fn response_debug_has_no_secrets() {
 	let web = WebResponse::new(200, &body);
 	for output in [format!("{send:?}"), format!("{list:?}"), format!("{web:?}")] {
 		assert_safe_text(&output);
-		assert!(!output.contains(&body));
-		assert!(output.contains("[REDACTED]"));
+		assert!(!output.contains(&body), "sensitive assertion failed");
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 	for body in [
 		body,
@@ -608,24 +618,39 @@ fn contradictory_auth_success_is_rejected() {
 				.unwrap_err(),
 		] {
 			match (success, auth) {
-				(true, _) => assert!(matches!(error, ConfirmerError::DeserializeError(_))),
-				(false, true) => assert!(matches!(error, ConfirmerError::InvalidTokens)),
+				(true, _) => assert!(
+					matches!(error, ConfirmerError::DeserializeError(_)),
+					"sensitive assertion failed"
+				),
+				(false, true) => assert!(
+					matches!(error, ConfirmerError::InvalidTokens),
+					"sensitive assertion failed"
+				),
 				(false, false) => {
-					assert!(matches!(error, ConfirmerError::RemoteFailureWithMessage(_)))
+					assert!(
+						matches!(error, ConfirmerError::RemoteFailureWithMessage(_)),
+						"sensitive assertion failed"
+					)
 				}
 			}
 			assert_safe_error(&error);
 		}
 		transport.assert_finished();
 	}
-	assert!(matches!(
-		get_list(r#"{"success":false}"#),
-		Err(ConfirmerError::RemoteFailure)
-	));
-	assert!(matches!(
-		get_list(r#"{"success":false,"needauth":true}"#),
-		Err(ConfirmerError::InvalidTokens)
-	));
+	assert!(
+		matches!(
+			get_list(r#"{"success":false}"#),
+			Err(ConfirmerError::RemoteFailure)
+		),
+		"sensitive assertion failed"
+	);
+	assert!(
+		matches!(
+			get_list(r#"{"success":false,"needauth":true}"#),
+			Err(ConfirmerError::InvalidTokens)
+		),
+		"sensitive assertion failed"
+	);
 	for body in [
 		r#"{"success":true}"#,
 		r#"{"success":true,"needsauth":null,"message":null}"#,

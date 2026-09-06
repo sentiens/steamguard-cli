@@ -34,13 +34,22 @@ mod test {
 		let oauth: OAuthData = serde_json::from_str("{\"steamid\":\"78562647129469312\",\"account_name\":\"feuarus\",\"oauth_token\":\"fd2fdb3d0717bcd2220d98c7ec61c7bd\",\"wgtoken\":\"72E7013D598A4F68C7E268F6FA3767D89D763732\",\"wgtoken_secure\":\"21061EA13C36D7C29812CAED900A215171AD13A2\",\"webcookie\":\"6298070A226E5DAD49938D78BCF36F7A7118FDD5\"}").unwrap();
 
 		assert_eq!(oauth.steamid, "78562647129469312");
-		assert_eq!(oauth.oauth_token, "fd2fdb3d0717bcd2220d98c7ec61c7bd");
-		assert_eq!(oauth.wgtoken, "72E7013D598A4F68C7E268F6FA3767D89D763732");
-		assert_eq!(
-			oauth.wgtoken_secure,
-			"21061EA13C36D7C29812CAED900A215171AD13A2"
+		assert!(
+			(oauth.oauth_token) == ("fd2fdb3d0717bcd2220d98c7ec61c7bd"),
+			"sensitive assertion failed"
 		);
-		assert_eq!(oauth.webcookie, "6298070A226E5DAD49938D78BCF36F7A7118FDD5");
+		assert!(
+			(oauth.wgtoken) == ("72E7013D598A4F68C7E268F6FA3767D89D763732"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(oauth.wgtoken_secure) == ("21061EA13C36D7C29812CAED900A215171AD13A2"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(oauth.webcookie) == ("6298070A226E5DAD49938D78BCF36F7A7118FDD5"),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
@@ -60,8 +69,8 @@ mod test {
 			"secure-web-token-canary",
 			"web-cookie-canary",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 }

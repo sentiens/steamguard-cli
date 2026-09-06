@@ -206,11 +206,7 @@ mod tests {
 			.chars()
 			.all(|c| matches!(c, 'A'..='Z' | '2'..='7'))
 			&& !bw_secret.contains('=');
-		assert!(
-			bw_is_unpadded_base32,
-			"Bitwarden QR format secret should be unpadded base32 encoded, but got: {}",
-			bw_secret
-		);
+		assert!(bw_is_unpadded_base32, "test invariant failed");
 
 		// KeePassXC format check
 		let keepass_cmd = QrCommand {
@@ -236,10 +232,6 @@ mod tests {
 			.chars()
 			.all(|c| matches!(c, 'A'..='Z' | '2'..='7'))
 			&& !keepass_secret.contains('=');
-		assert!(
-			keepass_is_unpadded_base32,
-			"KeePassXC QR format secret should be unpadded base32 encoded, but got: {}",
-			keepass_secret
-		);
+		assert!(keepass_is_unpadded_base32, "test invariant failed");
 	}
 }

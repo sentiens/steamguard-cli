@@ -211,9 +211,9 @@ mod tests {
 			} else {
 				Err(malformed())
 			};
-			assert_eq!(
-				crate::report_result(result.map_err(anyhow::Error::new)),
-				255
+			assert!(
+				(crate::report_result(result.map_err(anyhow::Error::new))) == (255),
+				"sensitive assertion failed"
 			);
 			return;
 		}

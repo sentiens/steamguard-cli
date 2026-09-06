@@ -30,6 +30,19 @@ where
 		eprintln!("Log in to the account that you want to link to steamguard-cli");
 		eprint!("Username: ");
 		let username = tui::prompt().to_lowercase();
+		self.execute_with_login(transport, manager, args, username, crate::do_login_raw)
+	}
+}
+
+impl SetupCommand {
+	fn execute_with_login<T: Transport + Clone>(
+		&self,
+		transport: T,
+		manager: &mut AccountManager,
+		args: &GlobalArgs,
+		username: String,
+		login: impl FnOnce(T, String, Option<SecretString>) -> anyhow::Result<Tokens>,
+	) -> anyhow::Result<()> {
 		let account_name = username.clone();
 		if manager.account_exists(&username) {
 			bail!(
@@ -38,8 +51,7 @@ where
 			);
 		}
 		info!("Logging in to {}", username);
-		let tokens = crate::do_login_raw(transport.clone(), username, args.password.clone())
-			.expect("Failed to log in. Account has not been linked.");
+		let tokens = login(transport.clone(), username, args.password.clone())?;
 
 		info!("Adding authenticator...");
 		let mut linker = AccountLinker::new(transport.clone(), tokens);
@@ -153,7 +165,7 @@ where
 				Err(err) => {
 					error!(
 						"Failed to link authenticator. Account has not been linked. {}",
-						err
+						crate::errors::safe_error(&err)
 					);
 					return Err(err.into());
 				}
@@ -181,17 +193,13 @@ impl SetupCommand {
 			Ok(_) => {}
 			Err(err) => {
 				error!("Aborting the account linking process because we failed to save the manifest. This is really bad. Here is the error: {}", crate::errors::safe_error(err.as_ref()));
-				eprintln!(
-					"Just in case, here is the account info. Save it somewhere just in case!\n{:#?}",
-					manager.get_account(&account_name).unwrap().lock().unwrap()
-				);
 				return Err(err);
 			}
 		}
-		let account_arc = manager
-			.get_account(&account_name)
-			.expect("account was not present in manifest");
-		let mut account = account_arc.lock().unwrap();
+		let account_arc = manager.get_account(&account_name)?;
+		let mut account = account_arc
+			.lock()
+			.map_err(|_| anyhow!("Account lock poisoned"))?;
 		eprintln!("Authenticator has not yet been linked. Before continuing with finalization, please take the time to write down your revocation code: {}", account.revocation_code.expose_secret());
 		tui::pause();
 		debug!("attempting link finalization");
@@ -236,8 +244,11 @@ impl SetupCommand {
 		let revocation_code = account.revocation_code.clone();
 		drop(account);
 		info!("Verifying authenticator status...");
-		let status =
-			linker.query_status(&manager.get_account(&account_name).unwrap().lock().unwrap())?;
+		let status = linker.query_status(
+			&*account_arc
+				.lock()
+				.map_err(|_| anyhow!("Account lock poisoned"))?,
+		)?;
 		if status.state() == 0 {
 			debug!(
 				"authenticator state: {} -- did not actually finalize",
@@ -254,7 +265,7 @@ impl SetupCommand {
 			Err(err) => {
 				error!(
 					"Failed to save manifest, but we were able to save it before. {}",
-					err
+					crate::errors::safe_error(err.as_ref())
 				);
 				return Err(err);
 			}
@@ -372,4 +383,91 @@ pub fn do_add_phone_number<T: Transport>(transport: T, tokens: &Tokens) -> anyho
 	info!("Successfully added phone number to account.");
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use steamguard::transport::{TransportError, WebApiTransport};
+
+	fn run_failed_login(error: anyhow::Error) {
+		let directory = tempfile::tempdir().unwrap();
+		let mut manager = AccountManager::new(&directory.path().join("manifest.json"));
+		let args = crate::commands::Args::parse_from(["steamguard", "setup"]);
+		let transport = WebApiTransport::new(
+			reqwest::blocking::Client::builder()
+				.no_proxy()
+				.build()
+				.unwrap(),
+		);
+		let result = SetupCommand.execute_with_login(
+			transport,
+			&mut manager,
+			&args.global,
+			"test-user".to_owned(),
+			|_, _, _| Err(error),
+		);
+		assert!(
+			crate::report_result(result) == 255,
+			"setup must report failure"
+		);
+		assert!(
+			!manager.account_exists(&"test-user".to_owned()),
+			"failed login linked an account"
+		);
+	}
+
+	#[test]
+	fn setup_login_error_output_redacts_source_chain() {
+		if crate::errors::tests::capture_diagnostic_test(
+			"commands::setup::tests::setup_login_error_output_redacts_source_chain",
+			"TransportError",
+		) {
+			return;
+		}
+		let source = anyhow::anyhow!("setup-source-canary");
+		run_failed_login(steamguard::LoginError::from(TransportError::Unknown(source)).into());
+	}
+
+	#[test]
+	fn setup_http_reason_output_redacts_source_chain() {
+		if crate::errors::tests::capture_diagnostic_test(
+			"commands::setup::tests::setup_http_reason_output_redacts_source_chain",
+			"HttpStatus",
+		) {
+			return;
+		}
+		use std::io::{Read, Write};
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			stream
+				.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+				.unwrap();
+			let mut request = Vec::new();
+			while !request.ends_with(b"\r\n\r\n") {
+				let mut byte = [0];
+				stream.read_exact(&mut byte).unwrap();
+				request.push(byte[0]);
+			}
+			stream.write_all(b"HTTP/1.1 429 setup-reason-canary\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+		});
+		let error = reqwest::blocking::Client::builder()
+			.no_proxy()
+			.timeout(std::time::Duration::from_secs(5))
+			.build()
+			.unwrap()
+			.get(format!("http://{address}/"))
+			.send()
+			.unwrap()
+			.error_for_status()
+			.unwrap_err();
+		server.join().unwrap();
+		assert!(
+			error.to_string().contains("setup-reason-canary"),
+			"HTTP fixture lost reason phrase"
+		);
+		run_failed_login(steamguard::LoginError::from(TransportError::from(error)).into());
+	}
 }

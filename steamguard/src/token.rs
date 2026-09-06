@@ -265,7 +265,10 @@ mod tests {
 		};
 
 		let serialized = serde_json::to_string(&secret)?;
-		assert_eq!(serialized, "{\"secret\":\"zvIayp3JPvtvX/QGHqsqKBk/44s=\"}");
+		assert!(
+			(serialized) == ("{\"secret\":\"zvIayp3JPvtvX/QGHqsqKBk/44s=\"}"),
+			"sensitive assertion failed"
+		);
 
 		Ok(())
 	}
@@ -275,7 +278,7 @@ mod tests {
 		let secret: FooBar = serde_json::from_str("{\"secret\":\"zvIayp3JPvtvX/QGHqsqKBk/44s=\"}")?;
 
 		let code = secret.secret.generate_code(1616374841u64);
-		assert_eq!(code, "2F9J5");
+		assert!((code) == ("2F9J5"), "sensitive assertion failed");
 
 		Ok(())
 	}
@@ -288,7 +291,7 @@ mod tests {
 
 		let serialized = serde_json::to_string(&secret)?;
 		let deserialized: FooBar = serde_json::from_str(&serialized)?;
-		assert_eq!(deserialized, secret);
+		assert!((deserialized) == (secret), "sensitive assertion failed");
 
 		Ok(())
 	}
@@ -299,8 +302,7 @@ mod tests {
 		let t2: [u8; 8] = [0, 0, 0, 0, 96, 106, 126, 109];
 		assert!(
 			t1.iter().zip(t2.iter()).all(|(a, b)| a == b),
-			"Arrays are not equal, got {:?}",
-			t1
+			"test invariant failed"
 		);
 	}
 
@@ -309,8 +311,11 @@ mod tests {
 		let secret = TwoFactorSecret::parse_shared_secret("zvIayp3JPvtvX/QGHqsqKBk/44s=".into())?;
 
 		let code = secret.generate_code(1616374841u64);
-		assert_eq!(code, "2F9J5");
-		assert_eq!(secret.generate_code(1616374859u64), "2F9J5");
+		assert!((code) == ("2F9J5"), "sensitive assertion failed");
+		assert!(
+			(secret.generate_code(1616374859u64)) == ("2F9J5"),
+			"sensitive assertion failed"
+		);
 		Ok(())
 	}
 
@@ -358,19 +363,29 @@ mod tests {
 	fn shared_secret_length_is_checked() {
 		for len in [0, 1, 19, 21, 40] {
 			let error = TwoFactorSecret::try_from_bytes(vec![42; len]).unwrap_err();
-			assert!(error.to_string().contains(&format!("got {len}")));
+			assert!(
+				error.to_string().contains(&format!("got {len}")),
+				"sensitive assertion failed"
+			);
 			let encoded = base64::engine::general_purpose::STANDARD.encode(vec![42; len]);
 			let error = TwoFactorSecret::parse_shared_secret(encoded.clone()).unwrap_err();
-			assert!(error.to_string().contains(&format!("got {len}")));
+			assert!(
+				error.to_string().contains(&format!("got {len}")),
+				"sensitive assertion failed"
+			);
 			if !encoded.is_empty() {
-				assert!(!format!("{error:?}").contains(&encoded));
+				assert!(
+					!format!("{error:?}").contains(&encoded),
+					"sensitive assertion failed"
+				);
 			}
 		}
-		assert_eq!(
-			TwoFactorSecret::try_from_bytes(vec![42; 20])
+		assert!(
+			(TwoFactorSecret::try_from_bytes(vec![42; 20])
 				.unwrap()
-				.expose_secret(),
-			&[42; 20]
+				.expose_secret())
+				== (&[42; 20]),
+			"sensitive assertion failed"
 		);
 	}
 
@@ -406,24 +421,48 @@ mod tests {
 			"8765432109",
 			"7654321098",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(!output.contains(&raw_secret_debug));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains(&raw_secret_debug),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
 	fn malformed_secrets_and_tokens_return_errors() {
-		assert!(TwoFactorSecret::try_from_bytes(vec![0; 19]).is_err());
-		assert!(TwoFactorSecret::parse_shared_secret("c2hvcnQ=".to_owned()).is_err());
-		assert!(serde_json::from_str::<FooBar>("{\"secret\":\"c2hvcnQ=\"}").is_err());
-		assert!(decode_jwt("header.payload").is_err());
-		assert!(decode_jwt("header.not-base64.signature").is_err());
-		assert!(decode_jwt(".payload.signature").is_err());
+		assert!(
+			TwoFactorSecret::try_from_bytes(vec![0; 19]).is_err(),
+			"sensitive assertion failed"
+		);
+		assert!(
+			TwoFactorSecret::parse_shared_secret("c2hvcnQ=".to_owned()).is_err(),
+			"sensitive assertion failed"
+		);
+		assert!(
+			serde_json::from_str::<FooBar>("{\"secret\":\"c2hvcnQ=\"}").is_err(),
+			"sensitive assertion failed"
+		);
+		assert!(
+			decode_jwt("header.payload").is_err(),
+			"sensitive assertion failed"
+		);
+		assert!(
+			decode_jwt("header.not-base64.signature").is_err(),
+			"sensitive assertion failed"
+		);
+		assert!(
+			decode_jwt(".payload.signature").is_err(),
+			"sensitive assertion failed"
+		);
 
 		let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
 			.encode(br#"{"exp":1,"iat":1,"iss":"steam","aud":[],"sub":"invalid","jti":"id"}"#);
-		assert!(decode_jwt(format!("header.{payload}.signature")).is_err());
+		assert!(
+			decode_jwt(format!("header.{payload}.signature")).is_err(),
+			"sensitive assertion failed"
+		);
 
 		let jwt_data = SteamJwtData {
 			exp: 1,
@@ -433,7 +472,10 @@ mod tests {
 			sub: "not-a-steam-id".to_owned(),
 			jti: "id".to_owned(),
 		};
-		assert!(jwt_data.try_steam_id().is_err());
+		assert!(
+			jwt_data.try_steam_id().is_err(),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
@@ -443,11 +485,20 @@ mod tests {
 
 		assert_eq!(data.exp, 1705011955);
 		assert_eq!(data.iat, 1687104837);
-		assert_eq!(data.iss, "steam");
-		assert_eq!(data.aud, vec!["web", "renew", "derive"]);
-		assert_eq!(data.sub, "76561199155706892");
+		assert!((data.iss) == ("steam"), "sensitive assertion failed");
+		assert!(
+			(data.aud) == (vec!["web", "renew", "derive"]),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(data.sub) == ("76561199155706892"),
+			"sensitive assertion failed"
+		);
 		assert_eq!(data.try_steam_id().unwrap(), 76561199155706892);
-		assert_eq!(data.jti, "18C5_22B3F431_CDF6A");
+		assert!(
+			(data.jti) == ("18C5_22B3F431_CDF6A"),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
@@ -455,7 +506,13 @@ mod tests {
 		let sample: Jwt = "eyAidHlwIjogIkpXVCIsICJhbGciOiAiRWREU0EiIH0.eyAiaXNzIjogInI6MTRCM18yMkZEQjg0RF9BMjJDRCIsICJzdWIiOiAiNzY1NjExOTk0NDE5OTI5NzAiLCAiYXVkIjogWyAid2ViIiwgIm1vYmlsZSIgXSwgImV4cCI6IDE2OTE3NTc5MzUsICJuYmYiOiAxNjgzMDMxMDUxLCAiaWF0IjogMTY5MTY3MTA1MSwgImp0aSI6ICIxNTI1XzIyRkRCOUJBXzZBRDkwIiwgIm9hdCI6IDE2OTE2NzEwNTEsICJydF9leHAiOiAxNzEwMDExNjg5LCAicGVyIjogMCwgImlwX3N1YmplY3QiOiAiMTA0LjI0Ni4xMjUuMTQxIiwgImlwX2NvbmZpcm1lciI6ICIxMDQuMjQ2LjEyNS4xNDEiIH0.ncqc5TpVlD05lnZvy8c3Bkx70gXDvQQXN0iG5Z4mOLgY_rwasXIJXnR-X4JczT8PmZ2v5cisW5VRHAdfsz_8CA".to_owned().into();
 		let data = sample.decode().expect("Failed to decode JWT");
 
-		assert_eq!(data.aud, vec!["web", "mobile"]);
-		assert_eq!(data.sub, "76561199441992970");
+		assert!(
+			(data.aud) == (vec!["web", "mobile"]),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(data.sub) == ("76561199441992970"),
+			"sensitive assertion failed"
+		);
 	}
 }

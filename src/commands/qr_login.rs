@@ -148,7 +148,10 @@ mod tests {
 		};
 		let output = format!("{source:?}");
 
-		assert!(!output.contains("4242424242424242"));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains("4242424242424242"),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 }

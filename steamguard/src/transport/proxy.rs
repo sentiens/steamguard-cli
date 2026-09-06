@@ -140,10 +140,13 @@ mod tests {
 			"http://@localhost:8080",
 			"http://%75ser:p%40ss@localhost:8080",
 		] {
-			assert!(matches!(
-				ProxyConfig::new(url),
-				Err(ProxyConfigError::CredentialsInUrl)
-			));
+			assert!(
+				matches!(
+					ProxyConfig::new(url),
+					Err(ProxyConfigError::CredentialsInUrl)
+				),
+				"sensitive assertion failed"
+			);
 		}
 		assert!(ProxyConfig::new("http://localhost:8080")
 			.unwrap()
@@ -181,7 +184,7 @@ mod tests {
 		] {
 			assert!(
 				matches!(ProxyConfig::new(url), Err(ProxyConfigError::InvalidUrl)),
-				"accepted {url:?}"
+				"test invariant failed"
 			);
 		}
 	}
@@ -210,9 +213,15 @@ mod tests {
 			.with_basic_auth("proxy-user-canary", "proxy-password-canary");
 		let output = format!("{config:?}");
 
-		assert!(!output.contains("proxy-user-canary"));
-		assert!(!output.contains("proxy-password-canary"));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains("proxy-user-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!output.contains("proxy-password-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -221,7 +230,7 @@ mod tests {
 		let error = ProxyConfig::new(input).unwrap_err();
 		let output = format!("{error:?} {error}");
 
-		assert!(!output.contains(input));
+		assert!(!output.contains(input), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -286,9 +295,15 @@ mod tests {
 		let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
 		let output = format!("{transport:?}");
 
-		assert!(!output.contains("proxy-user-canary"));
-		assert!(!output.contains("proxy-password-canary"));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains("proxy-user-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!output.contains("proxy-password-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -306,7 +321,13 @@ mod tests {
 			.unwrap_err();
 		let output = format!("{error:?} {error}");
 
-		assert!(!output.contains("proxy-user-canary"));
-		assert!(!output.contains("proxy-password-canary"));
+		assert!(
+			!output.contains("proxy-user-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!output.contains("proxy-password-canary"),
+			"sensitive assertion failed"
+		);
 	}
 }

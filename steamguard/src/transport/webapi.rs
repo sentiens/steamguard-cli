@@ -597,8 +597,14 @@ mod tests {
 
 		assert_eq!(get.method(), reqwest::Method::GET);
 		assert_eq!(get.url().query(), Some("key=value"));
-		assert_eq!(get.headers()[USER_AGENT], "test-agent");
-		assert_eq!(get.headers()[COOKIE], "session=test-cookie");
+		assert!(
+			(get.headers()[USER_AGENT]) == ("test-agent"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(get.headers()[COOKIE]) == ("session=test-cookie"),
+			"sensitive assertion failed"
+		);
 
 		let no_query = [];
 		let post = build_web_request(&transport.client, {
@@ -617,14 +623,17 @@ mod tests {
 		.unwrap();
 
 		assert_eq!(post.method(), reqwest::Method::POST);
-		assert_eq!(post.headers()[ORIGIN], "https://steamcommunity.com");
-		assert_eq!(
-			post.headers()[CONTENT_TYPE],
-			"application/x-www-form-urlencoded; charset=UTF-8"
+		assert!(
+			(post.headers()[ORIGIN]) == ("https://steamcommunity.com"),
+			"sensitive assertion failed"
 		);
-		assert_eq!(
-			post.body().unwrap().as_bytes(),
-			Some(b"key=value".as_slice())
+		assert!(
+			(post.headers()[CONTENT_TYPE]) == ("application/x-www-form-urlencoded; charset=UTF-8"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(post.body().unwrap().as_bytes()) == (Some(b"key=value".as_slice())),
+			"sensitive assertion failed"
 		);
 	}
 
@@ -688,9 +697,9 @@ mod tests {
 			"request-body-canary",
 			"response-body-canary",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -713,9 +722,9 @@ mod tests {
 			"response-error-canary",
 			"response-body-canary",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -775,11 +784,23 @@ mod tests {
 			.unwrap_err();
 
 		let output = format!("{error:?} {error}");
-		assert!(!output.contains("socks-user-%40-canary"));
-		assert!(!output.contains("socks:password-%40-canary"));
+		assert!(
+			!output.contains("socks-user-%40-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!output.contains("socks:password-%40-canary"),
+			"sensitive assertion failed"
+		);
 		let (username, password, domain, port) = server.join().unwrap();
-		assert_eq!(username, "socks-user-%40-canary");
-		assert_eq!(password, "socks:password-%40-canary");
+		assert!(
+			(username) == ("socks-user-%40-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(password) == ("socks:password-%40-canary"),
+			"sensitive assertion failed"
+		);
 		assert_eq!(domain, "remote-name.invalid");
 		assert_eq!(port, 8080);
 	}
@@ -792,7 +813,10 @@ mod tests {
 
 		let resp: CAuthentication_PollAuthSessionStatus_Response = decode_msg(&bytes).unwrap();
 
-		println!("{:#?}", resp);
+		assert!(
+			!resp.access_token().is_empty(),
+			"poll response token missing"
+		);
 	}
 
 	#[test]
@@ -803,7 +827,7 @@ mod tests {
 
 		let resp: CAuthentication_GetPasswordRSAPublicKey_Response = decode_msg(&bytes).unwrap();
 
-		println!("{:#?}", resp);
+		assert!(!resp.publickey_mod().is_empty(), "RSA public key missing");
 	}
 
 	#[test]
@@ -816,6 +840,9 @@ mod tests {
 
 		let encoded = encode_msg(&decoded, STANDARD).expect("Failed to encode");
 
-		assert_eq!(encoded, String::from_utf8(sample.to_vec()).unwrap());
+		assert!(
+			(encoded) == (String::from_utf8(sample.to_vec()).unwrap()),
+			"sensitive assertion failed"
+		);
 	}
 }

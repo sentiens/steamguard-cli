@@ -377,17 +377,25 @@ fn block<'a>(source: &'a str, declaration: &str) -> &'a str {
 fn poll_once_returns_waiting_without_sleeping() {
 	let code = production_code();
 	let body = block(&code, "pub fn poll_once(");
-	assert!(!Regex::new(
-		r"\b(sleep|sleep_until|park|park_timeout|wait|wait_timeout|loop|while|for)\b"
-	)
-	.unwrap()
-	.is_match(body));
-	assert_eq!(body.matches(".poll_auth_session(").count(), 1);
-	assert!(!body.contains("self.poll_once("));
+	assert!(
+		!Regex::new(r"\b(sleep|sleep_until|park|park_timeout|wait|wait_timeout|loop|while|for)\b")
+			.unwrap()
+			.is_match(body),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(body.matches(".poll_auth_session(").count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		!body.contains("self.poll_once("),
+		"sensitive assertion failed"
+	);
 	assert!(
 		!Regex::new(r"\.(unwrap|expect)\s*\(|\b(panic|unreachable|todo)\s*!")
 			.unwrap()
-			.is_match(&code)
+			.is_match(&code),
+		"sensitive assertion failed"
 	);
 
 	for response in [PollResponse::new(), progress_response()] {
@@ -396,7 +404,7 @@ fn poll_once_returns_waiting_without_sleeping() {
 		let outcome = login.poll_once().unwrap();
 		let elapsed = start.elapsed();
 		assert!(matches!(outcome, PollOutcome::Waiting));
-		assert!(elapsed < Duration::from_millis(50), "step took {elapsed:?}");
+		assert!(elapsed < Duration::from_millis(50), "test invariant failed");
 		transport.assert_finished();
 	}
 }
@@ -462,7 +470,10 @@ fn poll_interval_comes_from_steam() {
 	for invalid in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
 		let (mut login, transport) = new_login(vec![qr_step(Some(invalid))]);
 		let error = login.begin_auth_via_qr().unwrap_err();
-		assert!(matches!(error, LoginError::OtherFailure(_)));
+		assert!(
+			matches!(error, LoginError::OtherFailure(_)),
+			"sensitive assertion failed"
+		);
 		assert_redacted(&error, "challenge-url-canary");
 		assert_eq!(login.poll_interval(), None);
 		transport.assert_finished();
@@ -476,14 +487,38 @@ fn poll_until_tokens_is_built_on_poll_once() {
 	let waits =
 		Regex::new(r"\b(sleep|sleep_until|park|park_timeout|wait|wait_timeout)\s*\(").unwrap();
 	let loops = Regex::new(r"\b(loop|while)\b|\bfor\s+[^{};]*\bin\b").unwrap();
-	assert_eq!(body.matches("self.poll_once()").count(), 1);
-	assert_eq!(body.matches("self.poll_interval()").count(), 1);
-	assert_eq!(waits.find_iter(&code).count(), 1);
-	assert_eq!(waits.find_iter(body).count(), 1);
-	assert_eq!(loops.find_iter(&code).count(), 1);
-	assert_eq!(loops.find_iter(body).count(), 1);
-	assert!(!body.contains(".poll_auth_session("));
-	assert!(!code.contains("poll_until_info"));
+	assert!(
+		(body.matches("self.poll_once()").count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(body.matches("self.poll_interval()").count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(waits.find_iter(&code).count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(waits.find_iter(body).count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(loops.find_iter(&code).count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(loops.find_iter(body).count()) == (1),
+		"sensitive assertion failed"
+	);
+	assert!(
+		!body.contains(".poll_auth_session("),
+		"sensitive assertion failed"
+	);
+	assert!(
+		!code.contains("poll_until_info"),
+		"sensitive assertion failed"
+	);
 
 	for interval in [Some(0.002), None] {
 		let (mut login, transport) = started_login(
@@ -510,20 +545,23 @@ fn poll_until_tokens_is_built_on_poll_once() {
 		)],
 	);
 	let error = login.poll_until_tokens().unwrap_err();
-	assert!(matches!(
-		error.downcast_ref::<LoginError>(),
-		Some(LoginError::SessionExpired)
-	));
+	assert!(
+		matches!(
+			error.downcast_ref::<LoginError>(),
+			Some(LoginError::SessionExpired)
+		),
+		"sensitive assertion failed"
+	);
 	transport.assert_finished();
 }
 
 #[test]
 fn poll_once_maps_errors() {
 	let (mut login, transport) = new_login(vec![]);
-	assert!(matches!(
-		login.poll_once(),
-		Err(LoginError::SessionNotStarted)
-	));
+	assert!(
+		matches!(login.poll_once(), Err(LoginError::SessionNotStarted)),
+		"sensitive assertion failed"
+	);
 	transport.assert_finished();
 
 	for result in [
@@ -551,13 +589,25 @@ fn poll_once_maps_errors() {
 			let error = login.poll_once().unwrap_err();
 			match result {
 				EResult::Expired | EResult::FileNotFound => {
-					assert!(matches!(error, LoginError::SessionExpired))
+					assert!(
+						matches!(error, LoginError::SessionExpired),
+						"sensitive assertion failed"
+					)
 				}
 				EResult::RateLimitExceeded | EResult::AccountLoginDeniedThrottle => {
-					assert!(matches!(error, LoginError::TooManyAttempts))
+					assert!(
+						matches!(error, LoginError::TooManyAttempts),
+						"sensitive assertion failed"
+					)
 				}
-				EResult::InvalidPassword => assert!(matches!(error, LoginError::BadCredentials)),
-				_ => assert!(matches!(error, LoginError::UnknownEResult(value) if value == result)),
+				EResult::InvalidPassword => assert!(
+					matches!(error, LoginError::BadCredentials),
+					"sensitive assertion failed"
+				),
+				_ => assert!(
+					matches!(error, LoginError::UnknownEResult(value) if value == result),
+					"sensitive assertion failed"
+				),
 			}
 			assert_redacted(&error, "");
 			transport.assert_finished();
@@ -574,7 +624,10 @@ fn poll_once_maps_errors() {
 	] {
 		let (mut login, transport) = started_login(Some(5.0), vec![poll_step(response)]);
 		let error = login.poll_once().unwrap_err();
-		assert!(matches!(error, LoginError::UnknownOutcome));
+		assert!(
+			matches!(error, LoginError::UnknownOutcome),
+			"sensitive assertion failed"
+		);
 		assert_redacted(&error, "agreement-url-canary");
 		transport.assert_finished();
 	}
@@ -587,7 +640,10 @@ fn poll_once_maps_errors() {
 		let response = poll_response(None, Some(&malformed));
 		let (mut login, transport) = started_login(Some(5.0), vec![poll_step(response)]);
 		let error = login.poll_once().unwrap_err();
-		assert!(matches!(error, LoginError::OtherFailure(_)));
+		assert!(
+			matches!(error, LoginError::OtherFailure(_)),
+			"sensitive assertion failed"
+		);
 		assert_redacted(&error, &malformed);
 		assert_redacted(&error, "invalid-steam-id-canary");
 		transport.assert_finished();
@@ -602,7 +658,10 @@ fn poll_once_maps_errors() {
 				Step::response::<RefreshRequest, _>(EResult::OK, response),
 			],
 		);
-		assert!(matches!(login.poll_once(), Err(LoginError::UnknownOutcome)));
+		assert!(
+			matches!(login.poll_once(), Err(LoginError::UnknownOutcome)),
+			"sensitive assertion failed"
+		);
 		transport.assert_finished();
 	}
 	for steps in [
@@ -613,10 +672,13 @@ fn poll_once_maps_errors() {
 		],
 	] {
 		let (mut login, transport) = started_login(Some(5.0), steps);
-		assert!(matches!(
-			login.poll_once(),
-			Err(LoginError::TransportError(TransportError::Unauthorized))
-		));
+		assert!(
+			matches!(
+				login.poll_once(),
+				Err(LoginError::TransportError(TransportError::Unauthorized))
+			),
+			"sensitive assertion failed"
+		);
 		transport.assert_finished();
 	}
 }
@@ -707,10 +769,7 @@ fn upstream_public_names_remain_available() {
 			.map(|c| c.get(1).or_else(|| c.get(2)).unwrap().as_str())
 			.collect();
 		for name in expected {
-			assert!(
-				names.contains(name),
-				"upstream public declaration removed: {name}"
-			);
+			assert!(names.contains(name), "test invariant failed");
 		}
 	}
 	let code = production_code();
@@ -750,7 +809,7 @@ fn upstream_public_names_remain_available() {
 				Regex::new(&format!(r"(?m)^\s*{variant}\b"))
 					.unwrap()
 					.is_match(body),
-				"upstream variant removed: {name}::{variant}"
+				"sensitive assertion failed"
 			);
 		}
 	}

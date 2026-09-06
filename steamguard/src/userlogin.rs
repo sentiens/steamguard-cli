@@ -680,9 +680,15 @@ mod tests {
 		};
 
 		let output = format!("{response:?}");
-		assert!(!output.contains("challenge-url-canary"));
-		assert!(!output.contains("confirmation-message-canary"));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains("challenge-url-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!output.contains("confirmation-message-canary"),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -690,12 +696,18 @@ mod tests {
 		let mut invalid_exponent = CAuthentication_GetPasswordRSAPublicKey_Response::new();
 		invalid_exponent.set_publickey_exp("not-hex".to_owned());
 		invalid_exponent.set_publickey_mod("11".to_owned());
-		assert!(encrypt_password(invalid_exponent, "password").is_err());
+		assert!(
+			encrypt_password(invalid_exponent, "password").is_err(),
+			"sensitive assertion failed"
+		);
 
 		let mut invalid_modulus = CAuthentication_GetPasswordRSAPublicKey_Response::new();
 		invalid_modulus.set_publickey_exp("010001".to_owned());
 		invalid_modulus.set_publickey_mod("not-hex".to_owned());
-		assert!(encrypt_password(invalid_modulus, "password").is_err());
+		assert!(
+			encrypt_password(invalid_modulus, "password").is_err(),
+			"sensitive assertion failed"
+		);
 
 		assert!(poll_interval(f32::NAN).is_err());
 		assert!(poll_interval(-1.0).is_err());

@@ -367,7 +367,6 @@ mod tests {
 			},
 		];
 		for case in cases {
-			eprintln!("testing: {:?}", case);
 			let (manifest, accounts) = do_migrate(Path::new(case.manifest), case.passkey.as_ref())?;
 			assert_eq!(manifest.version, CURRENT_MANIFEST_VERSION);
 			assert_eq!(manifest.entries[0].account_name, "example");
@@ -434,7 +433,6 @@ mod tests {
 			},
 		];
 		for case in cases {
-			eprintln!("testing: {:?}", case);
 			let accounts = load_and_upgrade_external_accounts(Path::new(case.mafile))?;
 			let account = accounts[0].clone();
 			assert_eq!(account.account_name, case.account_name);
@@ -478,7 +476,6 @@ mod tests {
 			},
 		];
 		for case in cases {
-			eprintln!("testing: {:?}", case);
 			let temp = TempDir::new()?;
 			for file in std::fs::read_dir(case.dir)? {
 				let file = file?;

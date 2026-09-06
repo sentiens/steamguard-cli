@@ -497,19 +497,28 @@ mod tests {
 			confirm_type: AccountLinkConfirmType::SMS,
 		};
 		assert_eq!(success.phone_number_hint(), "+1 *** *** 0182");
-		assert_eq!(success.account().account_name, "account-canary");
+		assert!(
+			(success.account().account_name) == ("account-canary"),
+			"sensitive assertion failed"
+		);
 		let debug = format!("{success:?}");
 		assert!(!debug.contains("0182"));
-		assert!(!debug.contains("account-canary"));
+		assert!(
+			!debug.contains("account-canary"),
+			"sensitive assertion failed"
+		);
 		assert!(debug.contains("[REDACTED]"));
 	}
 
 	#[test]
 	fn truncated_transfer_response_returns_an_error() {
 		let mut response = CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Response::new();
-		assert!(matches!(
-			take_replacement_token(&mut response),
-			Err(TransferError::MissingReplacementToken)
-		));
+		assert!(
+			matches!(
+				take_replacement_token(&mut response),
+				Err(TransferError::MissingReplacementToken)
+			),
+			"sensitive assertion failed"
+		);
 	}
 }

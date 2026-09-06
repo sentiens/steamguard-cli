@@ -284,7 +284,7 @@ mod tests {
 		];
 		for url in urls {
 			let challenge = parse_challenge_url(url);
-			assert!(challenge.is_err(), "url: {}", url);
+			assert!(challenge.is_err(), "test invariant failed");
 		}
 	}
 
@@ -293,8 +293,11 @@ mod tests {
 		let challenge = Challenge::new(1, 4242424242424242);
 		let output = format!("{challenge:?}");
 
-		assert!(!output.contains("4242424242424242"));
-		assert!(output.contains("[REDACTED]"));
+		assert!(
+			!output.contains("4242424242424242"),
+			"sensitive assertion failed"
+		);
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 
 	#[test]

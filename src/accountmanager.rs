@@ -485,7 +485,6 @@ mod tests {
 	fn test_should_save_and_load_manifest() -> anyhow::Result<()> {
 		let tmp_dir = TempDir::new()?;
 		let manifest_path = tmp_dir.path().join("manifest.json");
-		println!("tempdir: {}", manifest_path.display());
 		let mut manager = AccountManager::new(manifest_path.as_path());
 		let mut account = SteamGuardAccount::new();
 		account.account_name = "asdf1234".into();
@@ -505,13 +504,17 @@ mod tests {
 		let account = manager.get_account(account_name)?;
 		let account = account.lock().unwrap();
 		assert_eq!(account.account_name, "asdf1234");
-		assert_eq!(account.revocation_code.expose_secret(), "R12345");
-		assert_eq!(
-			account.shared_secret,
-			steamguard::token::TwoFactorSecret::parse_shared_secret(
-				"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
-			)
-			.unwrap(),
+		assert!(
+			(account.revocation_code.expose_secret()) == ("R12345"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(account.shared_secret)
+				== (steamguard::token::TwoFactorSecret::parse_shared_secret(
+					"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
+				)
+				.unwrap()),
+			"sensitive assertion failed"
 		);
 		Ok(())
 	}
@@ -541,9 +544,6 @@ mod tests {
 			"asdf1234.maFile"
 		);
 		let _r = loaded_manager.load_accounts();
-		if _r.is_err() {
-			eprintln!("{:?}", _r);
-		}
 		assert!(_r.is_ok());
 		assert_eq!(
 			loaded_manager.manifest.entries.len(),
@@ -553,13 +553,17 @@ mod tests {
 		let account = loaded_manager.get_account(account_name)?;
 		let account = account.lock().unwrap();
 		assert_eq!(account.account_name, "asdf1234");
-		assert_eq!(account.revocation_code.expose_secret(), "R12345");
-		assert_eq!(
-			account.shared_secret,
-			steamguard::token::TwoFactorSecret::parse_shared_secret(
-				"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
-			)
-			.unwrap(),
+		assert!(
+			(account.revocation_code.expose_secret()) == ("R12345"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(account.shared_secret)
+				== (steamguard::token::TwoFactorSecret::parse_shared_secret(
+					"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
+				)
+				.unwrap()),
+			"sensitive assertion failed"
 		);
 
 		Ok(())
@@ -601,13 +605,17 @@ mod tests {
 		let account = loaded_manager.get_account(account_name)?;
 		let account = account.lock().unwrap();
 		assert_eq!(account.account_name, "asdf1234");
-		assert_eq!(account.revocation_code.expose_secret(), "R12345");
-		assert_eq!(
-			account.shared_secret,
-			steamguard::token::TwoFactorSecret::parse_shared_secret(
-				"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
-			)
-			.unwrap(),
+		assert!(
+			(account.revocation_code.expose_secret()) == ("R12345"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(account.shared_secret)
+				== (steamguard::token::TwoFactorSecret::parse_shared_secret(
+					"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
+				)
+				.unwrap()),
+			"sensitive assertion failed"
 		);
 
 		Ok(())
@@ -648,13 +656,17 @@ mod tests {
 		let account = loaded_manager.get_account(account_name)?;
 		let account = account.lock().unwrap();
 		assert_eq!(account.account_name, "asdf1234");
-		assert_eq!(account.revocation_code.expose_secret(), "R12345");
-		assert_eq!(
-			account.shared_secret,
-			steamguard::token::TwoFactorSecret::parse_shared_secret(
-				"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
-			)
-			.unwrap(),
+		assert!(
+			(account.revocation_code.expose_secret()) == ("R12345"),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(account.shared_secret)
+				== (steamguard::token::TwoFactorSecret::parse_shared_secret(
+					"zvIayp3JPvtvX/QGHqsqKBk/44s=".into()
+				)
+				.unwrap()),
+			"sensitive assertion failed"
 		);
 
 		Ok(())
@@ -686,7 +698,6 @@ mod tests {
 			},
 		];
 		for case in cases {
-			eprintln!("testing: {:?}", case);
 			let mut manager = AccountManager::load(Path::new(case.manifest))?;
 			manager.submit_passkey(case.passkey.clone());
 			manager.load_accounts()?;

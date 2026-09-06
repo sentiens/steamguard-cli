@@ -188,13 +188,16 @@ mod tests {
 		response.set_confirmation_email_address("email-canary@example.invalid".into());
 		response.set_phone_number_formatted("+1 202 555 0182".into());
 		let response = SetAccountPhoneNumberResponse::from(response);
-		assert_eq!(
-			response.confirmation_email_address(),
-			"email-canary@example.invalid"
+		assert!(
+			(response.confirmation_email_address()) == ("email-canary@example.invalid"),
+			"sensitive assertion failed"
 		);
 		assert_eq!(response.phone_number_formatted(), "+1 202 555 0182");
 		let debug = format!("{response:?} {response:#?}");
-		assert!(!debug.contains("email-canary"));
+		assert!(
+			!debug.contains("email-canary"),
+			"sensitive assertion failed"
+		);
 		assert!(!debug.contains("555 0182"));
 		assert!(debug.contains("[REDACTED]"));
 	}

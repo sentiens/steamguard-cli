@@ -102,7 +102,7 @@ fn assert_safe_error(error: &(dyn Error + 'static)) {
 	let mut current = Some(error);
 	while let Some(error) = current {
 		let output = format!("{error} {error:?}");
-		assert!(!output.contains("canary"));
+		assert!(!output.contains("canary"), "sensitive assertion failed");
 		current = error.source();
 	}
 }
@@ -111,20 +111,32 @@ fn assert_safe_error(error: &(dyn Error + 'static)) {
 fn unknown_eresult_preserves_numeric_code() {
 	for code in [4, 987654, -1, i32::MAX, i32::MIN] {
 		let result = EResult::from(code);
-		assert_eq!(result, EResult::Unknown(code));
-		assert_eq!(result.code(), code);
-		assert_eq!(i32::from(result), code);
+		assert!(
+			(result) == (EResult::Unknown(code)),
+			"sensitive assertion failed"
+		);
+		assert!((result.code()) == (code), "sensitive assertion failed");
+		assert!((i32::from(result)) == (code), "sensitive assertion failed");
 		let response = ApiResponse::new(result, Some(BODY.to_owned()), tokens());
-		assert_eq!(response.result(), EResult::Unknown(code));
+		assert!(
+			(response.result()) == (EResult::Unknown(code)),
+			"sensitive assertion failed"
+		);
 		let debug = format!("{response:?}");
-		assert!(debug.contains(&code.to_string()));
-		assert!(!debug.contains("canary"));
+		assert!(
+			debug.contains(&code.to_string()),
+			"sensitive assertion failed"
+		);
+		assert!(!debug.contains("canary"), "sensitive assertion failed");
 
 		let transport = FakeTransport::new::<StatusRequest, _>(result, StatusResponse::new());
 		let error = AccountLinker::new(transport.clone(), tokens())
 			.query_status_checked(&account())
 			.unwrap_err();
-		assert!(matches!(error, QueryStatusError::SteamRejected(value) if value == result));
+		assert!(
+			matches!(error, QueryStatusError::SteamRejected(value) if value == result),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 		transport.assert_finished();
 
@@ -137,7 +149,8 @@ fn unknown_eresult_preserves_numeric_code() {
 			panic!("expected a typed status error")
 		};
 		assert!(
-			matches!(error.downcast_ref::<QueryStatusError>(), Some(QueryStatusError::SteamRejected(value)) if *value == result)
+			matches!(error.downcast_ref::<QueryStatusError>(), Some(QueryStatusError::SteamRejected(value)) if *value == result),
+			"sensitive assertion failed"
 		);
 		transport.assert_finished();
 
@@ -145,7 +158,10 @@ fn unknown_eresult_preserves_numeric_code() {
 		let error = refresher(transport.clone())
 			.refresh_tokens(account().steam_id, &tokens())
 			.unwrap_err();
-		assert!(matches!(error, RefreshError::SteamRejected(value) if value == result));
+		assert!(
+			matches!(error, RefreshError::SteamRejected(value) if value == result),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 		transport.assert_finished();
 
@@ -154,7 +170,8 @@ fn unknown_eresult_preserves_numeric_code() {
 			.refresh(account().steam_id, &tokens())
 			.unwrap_err();
 		assert!(
-			matches!(error.downcast_ref::<RefreshError>(), Some(RefreshError::SteamRejected(value)) if *value == result)
+			matches!(error.downcast_ref::<RefreshError>(), Some(RefreshError::SteamRejected(value)) if *value == result),
+			"sensitive assertion failed"
 		);
 		assert_safe_error(error.as_ref());
 		transport.assert_finished();
@@ -165,8 +182,11 @@ fn unknown_eresult_preserves_numeric_code() {
 		(2, EResult::Fail),
 		(127, EResult::PhoneNumberIsVOIP),
 	] {
-		assert_eq!(EResult::from(code), result);
-		assert_eq!(result.code(), code);
+		assert!(
+			(EResult::from(code)) == (result),
+			"sensitive assertion failed"
+		);
+		assert!((result.code()) == (code), "sensitive assertion failed");
 	}
 }
 
@@ -197,7 +217,8 @@ fn status_error_body_is_not_state_zero() {
 				panic!("expected a typed status error")
 			};
 			assert!(
-				matches!(error.downcast_ref::<QueryStatusError>(), Some(QueryStatusError::SteamRejected(value)) if *value == result)
+				matches!(error.downcast_ref::<QueryStatusError>(), Some(QueryStatusError::SteamRejected(value)) if *value == result),
+				"sensitive assertion failed"
 			);
 			transport.assert_finished();
 		}
@@ -224,7 +245,10 @@ fn status_error_body_is_not_state_zero() {
 		let error = AccountLinker::new(transport.clone(), tokens())
 			.query_status_checked(&account())
 			.unwrap_err();
-		assert!(matches!(error, QueryStatusError::MalformedResponse));
+		assert!(
+			matches!(error, QueryStatusError::MalformedResponse),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 		transport.assert_finished();
 		let transport = FakeTransport::new::<StatusRequest, _>(EResult::OK, body);
@@ -235,10 +259,13 @@ fn status_error_body_is_not_state_zero() {
 		let TransportError::Unknown(error) = error else {
 			panic!("expected a typed format error")
 		};
-		assert!(matches!(
-			error.downcast_ref::<QueryStatusError>(),
-			Some(QueryStatusError::MalformedResponse)
-		));
+		assert!(
+			matches!(
+				error.downcast_ref::<QueryStatusError>(),
+				Some(QueryStatusError::MalformedResponse)
+			),
+			"sensitive assertion failed"
+		);
 		transport.assert_finished();
 	}
 	// An explicit state zero is valid only in a successful, complete status response.
@@ -278,7 +305,10 @@ fn refresh_returns_new_refresh_token_when_present() {
 			original.refresh_token().expose_secret() == OLD_REFRESH,
 			"secret values differ"
 		);
-		assert!(!format!("{updated:?}").contains("canary"));
+		assert!(
+			!format!("{updated:?}").contains("canary"),
+			"sensitive assertion failed"
+		);
 		transport.assert_finished();
 	}
 	for (access, refresh) in [
@@ -293,7 +323,10 @@ fn refresh_returns_new_refresh_token_when_present() {
 		let error = refresher(transport.clone())
 			.refresh_tokens(account().steam_id, &tokens())
 			.unwrap_err();
-		assert!(matches!(error, RefreshError::MalformedResponse));
+		assert!(
+			matches!(error, RefreshError::MalformedResponse),
+			"sensitive assertion failed"
+		);
 		assert_safe_error(&error);
 		transport.assert_finished();
 	}
@@ -310,9 +343,12 @@ fn refresh_returns_new_refresh_token_when_present() {
 	);
 	transport.assert_finished();
 	let transport = FakeTransport::new::<RefreshRequest, _>(EResult::Expired, response);
-	assert!(matches!(
-		refresher(transport.clone()).refresh_tokens(account().steam_id, &tokens()),
-		Err(RefreshError::SteamRejected(EResult::Expired))
-	));
+	assert!(
+		matches!(
+			refresher(transport.clone()).refresh_tokens(account().steam_id, &tokens()),
+			Err(RefreshError::SteamRejected(EResult::Expired))
+		),
+		"sensitive assertion failed"
+	);
 	transport.assert_finished();
 }

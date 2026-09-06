@@ -25,6 +25,9 @@ mod test {
 	#[test]
 	fn test_secret_string_deserialize() {
 		let foo: Foo = serde_json::from_str("{\"secret\": \"hello\"}").unwrap();
-		assert_eq!(foo.secret.expose_secret(), "hello");
+		assert!(
+			(foo.secret.expose_secret()) == ("hello"),
+			"sensitive assertion failed"
+		);
 	}
 }

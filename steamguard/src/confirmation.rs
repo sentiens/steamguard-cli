@@ -896,7 +896,10 @@ mod tests {
 		))
 		.unwrap_err();
 
-		assert!(error.to_string().contains("missing field `conf`"));
+		assert!(
+			error.to_string().contains("missing field `conf`"),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
@@ -933,10 +936,13 @@ mod tests {
 		let account = SteamGuardAccount::default();
 		let confirmer = Confirmer::new(transport, &account);
 
-		assert!(matches!(
-			confirmer.build_cookie_header(),
-			Err(ConfirmerError::InvalidTokens)
-		));
+		assert!(
+			matches!(
+				confirmer.build_cookie_header(),
+				Err(ConfirmerError::InvalidTokens)
+			),
+			"sensitive assertion failed"
+		);
 		assert!(generate_confirmation_hash_for_time(1, "conf", "not-base64").is_err());
 
 		let account = SteamGuardAccount {
@@ -953,10 +959,13 @@ mod tests {
 				.unwrap(),
 		);
 		let confirmer = Confirmer::new(transport, &account);
-		assert!(matches!(
-			confirmer.build_cookie_header(),
-			Err(ConfirmerError::InvalidCookieHeader)
-		));
+		assert!(
+			matches!(
+				confirmer.build_cookie_header(),
+				Err(ConfirmerError::InvalidCookieHeader)
+			),
+			"sensitive assertion failed"
+		);
 	}
 
 	#[test]
@@ -1037,8 +1046,8 @@ mod tests {
 			"list-message-canary",
 			"action-message-canary",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 }

@@ -299,8 +299,8 @@ mod tests {
 			"proxy-user-canary",
 			"proxy-password-canary",
 		] {
-			assert!(!output.contains(canary));
+			assert!(!output.contains(canary), "sensitive assertion failed");
 		}
-		assert!(output.contains("[REDACTED]"));
+		assert!(output.contains("[REDACTED]"), "sensitive assertion failed");
 	}
 }

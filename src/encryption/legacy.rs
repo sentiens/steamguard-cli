@@ -109,24 +109,24 @@ mod tests {
 	/// This test ensures compatibility with SteamDesktopAuthenticator and with previous versions of steamguard-cli
 	#[test]
 	fn test_encryption_key() {
-		assert_eq!(
-			LegacySdaCompatible::get_encryption_key("password", "GMhL0N2hqXg=")
+		assert!(
+			(LegacySdaCompatible::get_encryption_key("password", "GMhL0N2hqXg=")
 				.unwrap()
-				.as_slice(),
-			base64::engine::general_purpose::STANDARD
+				.as_slice()) == (base64::engine::general_purpose::STANDARD
 				.decode("KtiRa4/OxW83MlB6URf+Z8rAGj7CBY+pDlwD/NuVo6Y=")
 				.unwrap()
-				.as_slice()
+				.as_slice()),
+			"sensitive assertion failed"
 		);
 
-		assert_eq!(
-			LegacySdaCompatible::get_encryption_key("password", "wTzTE9A6aN8=")
+		assert!(
+			(LegacySdaCompatible::get_encryption_key("password", "wTzTE9A6aN8=")
 				.unwrap()
-				.as_slice(),
-			base64::engine::general_purpose::STANDARD
+				.as_slice()) == (base64::engine::general_purpose::STANDARD
 				.decode("Dqpej/3DqEat0roJaHmu3luYgDzRCUmzX94n4fqvWj8=")
 				.unwrap()
-				.as_slice()
+				.as_slice()),
+			"sensitive assertion failed"
 		);
 	}
 
@@ -142,11 +142,10 @@ mod tests {
 		let passkey = "password";
 		let scheme = LegacySdaCompatible::generate();
 		for case in cases {
-			eprintln!("testing case: {} (len {})", case, case.len());
 			let orig = case.as_bytes().to_vec();
 			let encrypted = scheme.encrypt(passkey, orig.clone()).unwrap();
 			let result = scheme.decrypt(passkey, encrypted).unwrap();
-			assert_eq!(orig, result.to_vec());
+			assert!((orig) == (result.to_vec()), "sensitive assertion failed");
 		}
 		Ok(())
 	}

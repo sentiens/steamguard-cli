@@ -31,7 +31,7 @@ pub(super) fn accept(listener: &TcpListener) -> TcpStream {
 			Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
 				thread::sleep(Duration::from_millis(5));
 			}
-			Err(e) => panic!("loopback accept failed: {e}"),
+			Err(_) => panic!("loopback accept failed"),
 		}
 	}
 }
@@ -89,11 +89,11 @@ pub(super) fn refused_endpoint() -> ((TcpStream, TcpStream), SocketAddr) {
 #[test]
 fn held_client_endpoint_refuses_new_connections() {
 	let ((mut client, mut peer), address) = refused_endpoint();
-	assert_eq!(
-		TcpStream::connect_timeout(&address, Duration::from_secs(2))
+	assert!(
+		(TcpStream::connect_timeout(&address, Duration::from_secs(2))
 			.unwrap_err()
-			.kind(),
-		std::io::ErrorKind::ConnectionRefused
+			.kind()) == (std::io::ErrorKind::ConnectionRefused),
+		"sensitive assertion failed"
 	);
 	client
 		.set_read_timeout(Some(Duration::from_secs(2)))
@@ -103,7 +103,7 @@ fn held_client_endpoint_refuses_new_connections() {
 	peer.write_all(b"held").unwrap();
 	let mut bytes = [0; 4];
 	client.read_exact(&mut bytes).unwrap();
-	assert_eq!(&bytes, b"held");
+	assert!((&bytes) == (b"held"), "sensitive assertion failed");
 }
 
 #[cfg(feature = "test-endpoints")]
@@ -126,7 +126,7 @@ fn pending_connections(listener: &TcpListener) -> usize {
 		match listener.accept() {
 			Ok(_) => count += 1,
 			Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return count,
-			Err(e) => panic!("counting loopback attempts failed: {e}"),
+			Err(_) => panic!("counting loopback attempts failed"),
 		}
 	}
 }
@@ -160,14 +160,19 @@ fn in_environment(name: &str, environment: &[(&str, String)]) -> bool {
 		])
 		.env_clear()
 		.env("STEAMGUARD_TEST_PROCESS", name)
+		.env("TMPDIR", "/private/tmp")
 		.envs(environment.iter().map(|(key, value)| (*key, value)))
 		.output()
 		.unwrap();
 	let stdout = String::from_utf8_lossy(&output.stdout);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		!stdout.contains("Operation not permitted") && !stderr.contains("Operation not permitted"),
+		"loopback fixture blocked: EPERM"
+	);
 	assert!(
 		output.status.success() && stdout.contains("test result: ok. 1 passed;"),
-		"child test failed or selected no cases:\n{stdout}\n{}",
-		String::from_utf8_lossy(&output.stderr)
+		"sensitive assertion failed"
 	);
 	true
 }
@@ -294,7 +299,10 @@ fn plain_constructor_is_unchanged() {
 	);
 	let request = server.join().unwrap().to_ascii_lowercase();
 	assert!(request.starts_with("get /end http/1.1"));
-	assert!(request.contains("cookie: saved=caller"));
+	assert!(
+		request.contains("cookie: saved=caller"),
+		"sensitive assertion failed"
+	);
 	assert!(request.contains("user-agent: caller-selected-agent"));
 }
 
@@ -321,13 +329,14 @@ fn redirect_then_connection_failure_does_not_prove_no_send() {
 			web_get(&WebApiTransport::new(client), &url).unwrap_err()
 		};
 		assert!(server.join().unwrap().starts_with("GET /already-sent "));
-		assert_eq!(
-			error.kind(),
-			NetworkErrorKind::Connection,
-			"{}",
-			error_facts(&error)
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Connection),
+			"test invariant failed"
 		);
-		assert_eq!(error.sent(), RequestSent::Maybe);
+		assert!(
+			(error.sent()) == (RequestSent::Maybe),
+			"sensitive assertion failed"
+		);
 	}
 }
 
@@ -343,14 +352,18 @@ fn approved_connection_refusal_preserves_no_send_proof() {
 		error.sent(),
 		error_facts(&error)
 	);
-	assert_eq!(
-		error.kind(),
-		NetworkErrorKind::Connection,
-		"{}",
-		error_facts(&error)
+	assert!(
+		(error.kind()) == (NetworkErrorKind::Connection),
+		"test invariant failed"
 	);
-	assert_eq!(error.sent(), RequestSent::No);
-	assert!(error.source().unwrap().is::<reqwest::Error>());
+	assert!(
+		(error.sent()) == (RequestSent::No),
+		"sensitive assertion failed"
+	);
+	assert!(
+		error.source().unwrap().is::<reqwest::Error>(),
+		"sensitive assertion failed"
+	);
 }
 
 fn assert_redirect_builder_is_maybe(raw_conversion: bool) {
@@ -380,18 +393,24 @@ fn assert_redirect_builder_is_maybe(raw_conversion: bool) {
 		.unwrap()
 		.downcast_ref::<reqwest::Error>()
 		.unwrap();
-	assert!(source.is_builder(), "{}", error_facts(&error));
+	assert!(source.is_builder(), "test invariant failed");
 	assert!(source.url().is_none());
 	assert!(source.source().is_some());
-	assert_eq!(error.kind(), NetworkErrorKind::Request);
+	assert!(
+		(error.kind()) == (NetworkErrorKind::Request),
+		"sensitive assertion failed"
+	);
 	for diagnostic in [
 		format!("{error}"),
 		format!("{error:#}"),
 		format!("{error:?}"),
 		format!("{error:#?}"),
 	] {
-		assert!(!diagnostic.contains("://"));
-		assert!(!diagnostic.contains("redirect-canary"));
+		assert!(!diagnostic.contains("://"), "sensitive assertion failed");
+		assert!(
+			!diagnostic.contains("redirect-canary"),
+			"sensitive assertion failed"
+		);
 	}
 	eprintln!(
 		"redirect: raw_conversion={raw_conversion}, received=1, kind={:?}, sent={:?}, {}",
@@ -399,7 +418,10 @@ fn assert_redirect_builder_is_maybe(raw_conversion: bool) {
 		error.sent(),
 		error_facts(&error)
 	);
-	assert_eq!(error.sent(), RequestSent::Maybe);
+	assert!(
+		(error.sent()) == (RequestSent::Maybe),
+		"sensitive assertion failed"
+	);
 }
 
 #[test]
@@ -436,8 +458,14 @@ fn local_request_construction_preserves_no_send_proof() {
 				"en",
 			))
 			.unwrap_err();
-		assert_eq!(error.kind(), NetworkErrorKind::Request);
-		assert_eq!(error.sent(), RequestSent::No);
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Request),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.sent()) == (RequestSent::No),
+			"sensitive assertion failed"
+		);
 		let source = error
 			.source()
 			.unwrap()
@@ -447,8 +475,14 @@ fn local_request_construction_preserves_no_send_proof() {
 		assert!(source.source().is_some());
 		assert!(source.url().is_none());
 		let error = web_get(&transport, "invalid URL").unwrap_err();
-		assert_eq!(error.kind(), NetworkErrorKind::InvalidRequest);
-		assert_eq!(error.sent(), RequestSent::No);
+		assert!(
+			(error.kind()) == (NetworkErrorKind::InvalidRequest),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.sent()) == (RequestSent::No),
+			"sensitive assertion failed"
+		);
 		assert_eq!(pending_connections(&listener), 0);
 	}
 }
@@ -467,9 +501,18 @@ fn generic_builder_conversion_does_not_assume_local_provenance() {
 	assert!(source.is_builder());
 	// The recipient of a public conversion cannot know which boundary produced this category.
 	let error = NetworkError::from(source);
-	assert_eq!(error.kind(), NetworkErrorKind::Request);
-	assert_eq!(error.sent(), RequestSent::Maybe);
-	assert!(error.source().unwrap().is::<reqwest::Error>());
+	assert!(
+		(error.kind()) == (NetworkErrorKind::Request),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(error.sent()) == (RequestSent::Maybe),
+		"sensitive assertion failed"
+	);
+	assert!(
+		error.source().unwrap().is::<reqwest::Error>(),
+		"sensitive assertion failed"
+	);
 }
 
 #[test]
@@ -496,8 +539,14 @@ fn unsupported_web_transport_preserves_no_send_proof() {
 			"en",
 		))
 		.unwrap_err();
-	assert_eq!(error.kind(), NetworkErrorKind::UnsupportedTransport);
-	assert_eq!(error.sent(), RequestSent::No);
+	assert!(
+		(error.kind()) == (NetworkErrorKind::UnsupportedTransport),
+		"sensitive assertion failed"
+	);
+	assert!(
+		(error.sent()) == (RequestSent::No),
+		"sensitive assertion failed"
+	);
 }
 
 #[test]
@@ -541,7 +590,8 @@ fn tls_server(listener: TcpListener, tunnel: bool) -> thread::JoinHandle<bool> {
 		let mut stream = accept(&listener);
 		if tunnel {
 			assert!(
-				read_headers(&mut stream).starts_with("CONNECT origin-canary.invalid:443 HTTP/1.1")
+				read_headers(&mut stream).starts_with("CONNECT origin-canary.invalid:443 HTTP/1.1"),
+				"sensitive assertion failed"
 			);
 			stream
 				.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
@@ -556,7 +606,7 @@ fn tls_server(listener: TcpListener, tunnel: bool) -> thread::JoinHandle<bool> {
 						rustls::AlertDescription::UnknownCA
 					))
 				)),
-				"synthetic TLS peer: {error:?}"
+				"test invariant failed"
 			);
 			return false;
 		}
@@ -599,13 +649,14 @@ fn tls_rejection_is_classified_as_tls_for_origin_and_https_proxy() {
 		let transport = WebApiTransport::new_with_proxy(&proxy).unwrap();
 		let server = tls_server(listener, tunnel);
 		let error = web_get(&transport, "https://origin-canary.invalid/mitm").unwrap_err();
-		assert_eq!(
-			error.kind(),
-			NetworkErrorKind::Tls,
-			"tunnel={tunnel}; synthetic source: {:?}",
-			error.source()
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Tls),
+			"test invariant failed"
 		);
-		assert_eq!(error.sent(), RequestSent::No);
+		assert!(
+			(error.sent()) == (RequestSent::No),
+			"sensitive assertion failed"
+		);
 		assert!(
 			has_untrusted_certificate(&error),
 			"expected typed UnknownIssuer, not a setup failure"
@@ -656,11 +707,14 @@ fn silent_proxy_obeys_connect_and_total_timeouts() {
 		let elapsed = start.elapsed();
 		done.send(()).unwrap();
 		server.join().unwrap();
-		assert_eq!(error.kind(), NetworkErrorKind::Timeout);
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Timeout),
+			"sensitive assertion failed"
+		);
 		assert!(
 			elapsed >= Duration::from_secs(seconds - 1)
 				&& elapsed < Duration::from_secs(seconds + 5),
-			"elapsed {elapsed:?}"
+			"test invariant failed"
 		);
 	}
 }
@@ -695,10 +749,22 @@ fn transport_error_carries_network_failure() {
 		server.join().unwrap();
 		match result.unwrap_err() {
 			TransportError::NetworkFailure(error) => {
-				assert_eq!(error.kind(), NetworkErrorKind::HttpStatus);
-				assert_eq!(error.status().unwrap().as_u16(), status);
-				assert_eq!(error.retry_after().unwrap(), "120");
-				assert_eq!(error.sent(), RequestSent::Yes);
+				assert!(
+					(error.kind()) == (NetworkErrorKind::HttpStatus),
+					"sensitive assertion failed"
+				);
+				assert!(
+					(error.status().unwrap().as_u16()) == (status),
+					"sensitive assertion failed"
+				);
+				assert!(
+					(error.retry_after().unwrap()) == ("120"),
+					"sensitive assertion failed"
+				);
+				assert!(
+					(error.sent()) == (RequestSent::Yes),
+					"sensitive assertion failed"
+				);
 			}
 			_ => panic!("HTTP status was lost outside NetworkFailure"),
 		}
@@ -729,10 +795,13 @@ fn response_fixture(
 			stream.write_all(&body)
 		};
 		if let Err(error) = result {
-			assert!(matches!(
-				error.kind(),
-				std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
-			));
+			assert!(
+				matches!(
+					error.kind(),
+					std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+				),
+				"sensitive assertion failed"
+			);
 		}
 	});
 	let result = web_get(&transport, "http://origin.invalid/body");
@@ -755,20 +824,32 @@ fn response_body_limits_cover_length_chunked_and_eof() {
 				assert_eq!(result.unwrap().into_body().len(), length);
 			} else {
 				let error = result.unwrap_err();
-				assert_eq!(error.kind(), NetworkErrorKind::Body);
-				assert_eq!(error.status().unwrap().as_u16(), 200);
-				assert_eq!(error.sent(), RequestSent::Yes);
+				assert!(
+					(error.kind()) == (NetworkErrorKind::Body),
+					"sensitive assertion failed"
+				);
+				assert!(
+					(error.status().unwrap().as_u16()) == (200),
+					"sensitive assertion failed"
+				);
+				assert!(
+					(error.sent()) == (RequestSent::Yes),
+					"sensitive assertion failed"
+				);
 			}
 		}
 	}
 	let error = response_fixture("Content-Length: 10\r\n", b"short".to_vec(), false).unwrap_err();
-	assert_eq!(error.kind(), NetworkErrorKind::Body);
-	assert!(error.source().is_some());
-	assert_eq!(
-		response_fixture("Content-Length: 1\r\n", vec![255], false)
+	assert!(
+		(error.kind()) == (NetworkErrorKind::Body),
+		"sensitive assertion failed"
+	);
+	assert!(error.source().is_some(), "sensitive assertion failed");
+	assert!(
+		(response_fixture("Content-Length: 1\r\n", vec![255], false)
 			.unwrap_err()
-			.kind(),
-		NetworkErrorKind::Body
+			.kind()) == (NetworkErrorKind::Body),
+		"sensitive assertion failed"
 	);
 }
 
@@ -783,7 +864,7 @@ fn gzip_limits_apply_before_and_after_decompression() {
 	const LIMIT: usize = 16 * 1024 * 1024;
 	for length in [LIMIT - 1, LIMIT, LIMIT + 1] {
 		let bytes = gzip(&vec![b'x'; length]);
-		assert!(bytes.len() < 8 * 1024 * 1024);
+		assert!(bytes.len() < 8 * 1024 * 1024, "sensitive assertion failed");
 		let result = response_fixture(
 			"Content-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n",
 			bytes,
@@ -792,36 +873,45 @@ fn gzip_limits_apply_before_and_after_decompression() {
 		if length <= LIMIT {
 			assert_eq!(result.unwrap().into_body().len(), length);
 		} else {
-			assert_eq!(result.unwrap_err().kind(), NetworkErrorKind::Body);
+			assert!(
+				(result.unwrap_err().kind()) == (NetworkErrorKind::Body),
+				"sensitive assertion failed"
+			);
 		}
 	}
 	// Valid concatenated members must share one decoded budget.
 	let mut bytes = gzip(&vec![b'x'; LIMIT]);
 	bytes.extend(gzip(b"x"));
-	assert_eq!(
-		response_fixture("Content-Encoding: gzip\r\n", bytes, false)
+	assert!(
+		(response_fixture("Content-Encoding: gzip\r\n", bytes, false)
 			.unwrap_err()
-			.kind(),
-		NetworkErrorKind::Body
+			.kind()) == (NetworkErrorKind::Body),
+		"sensitive assertion failed"
 	);
 	// An unfinished large gzip body is refused from its raw length before it can be decoded.
-	assert_eq!(
-		response_fixture(
+	assert!(
+		(response_fixture(
 			"Content-Encoding: gzip\r\nContent-Length: 8388609\r\n",
 			vec![],
 			false
 		)
 		.unwrap_err()
-		.kind(),
-		NetworkErrorKind::Body
+		.kind()) == (NetworkErrorKind::Body),
+		"sensitive assertion failed"
 	);
 	for bytes in [
 		b"malformed-gzip-canary".to_vec(),
 		gzip(b"canary")[..10].to_vec(),
 	] {
 		let error = response_fixture("Content-Encoding: gzip\r\n", bytes, false).unwrap_err();
-		assert_eq!(error.kind(), NetworkErrorKind::Body);
-		assert!(!format!("{error} {error:?}").contains("canary"));
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Body),
+			"sensitive assertion failed"
+		);
+		assert!(
+			!format!("{error} {error:?}").contains("canary"),
+			"sensitive assertion failed"
+		);
 	}
 }
 
@@ -833,7 +923,10 @@ fn oversized_headers_are_rejected_after_parsing() {
 		if length < 64 * 1024 {
 			assert_eq!(result.unwrap().status(), 200);
 		} else {
-			assert_eq!(result.unwrap_err().kind(), NetworkErrorKind::Body);
+			assert!(
+				(result.unwrap_err().kind()) == (NetworkErrorKind::Body),
+				"sensitive assertion failed"
+			);
 		}
 	}
 }
@@ -845,18 +938,21 @@ fn proxied_client_does_not_persist_cookies() {
 	let server = thread::spawn(move || {
 		for _ in 0..2 {
 			let mut stream = accept(&listener);
-			assert!(!read_headers(&mut stream)
-				.to_ascii_lowercase()
-				.contains("saved=canary"));
+			assert!(
+				!read_headers(&mut stream)
+					.to_ascii_lowercase()
+					.contains("saved=canary"),
+				"sensitive assertion failed"
+			);
 			stream.write_all(b"HTTP/1.1 200 OK\r\nSet-Cookie: saved=canary\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
 		}
 	});
 	for _ in 0..2 {
-		assert_eq!(
-			web_get(&transport, "http://origin.invalid/cookies")
+		assert!(
+			(web_get(&transport, "http://origin.invalid/cookies")
 				.unwrap()
-				.status(),
-			200
+				.status()) == (200),
+			"sensitive assertion failed"
 		);
 	}
 	server.join().unwrap();
@@ -902,20 +998,24 @@ fn api_diagnostics_never_format_upstream_text() {
 		let response = crate::steamapi::TwoFactorClient::new(transport).query_time();
 		server.join().unwrap();
 		if eresult == "1" {
-			assert_eq!(
-				response.as_ref().unwrap().error_message().unwrap(),
-				"arbitrary-message-canary"
+			assert!(
+				(response.as_ref().unwrap().error_message().unwrap())
+					== ("arbitrary-message-canary"),
+				"sensitive assertion failed"
 			);
 		} else {
-			assert!(matches!(
-				response,
-				Err(TransportError::HeaderParseFailure { .. })
-			));
+			assert!(
+				matches!(response, Err(TransportError::HeaderParseFailure { .. })),
+				"sensitive assertion failed"
+			);
 		}
-		assert!(!format!("{response:?}").contains("canary"));
+		assert!(
+			!format!("{response:?}").contains("canary"),
+			"sensitive assertion failed"
+		);
 	}
 	let logs = LOGS.lock().unwrap();
 	assert!(logs.contains("HTTP Request method:"));
-	assert!(!logs.contains("canary"));
+	assert!(!logs.contains("canary"), "sensitive assertion failed");
 	assert!(!logs.contains("://"));
 }

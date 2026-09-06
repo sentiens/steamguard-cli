@@ -102,8 +102,7 @@ mod tests {
 		let stdout = String::from_utf8_lossy(&output.stdout);
 		assert!(
 			output.status.success() && stdout.contains("test result: ok. 1 passed;"),
-			"{test_name} did not pass exactly one child test:\n{stdout}\n{}",
-			String::from_utf8_lossy(&output.stderr)
+			"sensitive assertion failed"
 		);
 		false
 	}
@@ -130,12 +129,13 @@ mod tests {
 			api_request.build_url(),
 			format!("{}/ITwoFactorService/QueryTime/v1", expected[0])
 		);
-		assert_eq!(
-			login_request.build_url(),
-			format!(
-				"{}/IAuthenticationService/GetPasswordRSAPublicKey/v1",
-				expected[2]
-			)
+		assert!(
+			(login_request.build_url())
+				== (format!(
+					"{}/IAuthenticationService/GetPasswordRSAPublicKey/v1",
+					expected[2]
+				)),
+			"sensitive assertion failed"
 		);
 		assert_eq!(
 			community_url("mobileconf/getlist").unwrap().as_str(),
@@ -180,9 +180,7 @@ mod tests {
 								line.starts_with("const ")
 									&& line_number > 0 && lines[line_number - 1]
 									== r#"#[cfg(feature = "test-endpoints")]"#,
-								"unguarded endpoint variable at {}:{}",
-								path.display(),
-								line_number + 1
+								"test invariant failed"
 							);
 							occurrences[index] += line.matches(variable.as_str()).count();
 						}

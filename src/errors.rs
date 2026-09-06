@@ -90,9 +90,49 @@ pub(crate) fn safe_error(error: &(dyn std::error::Error + 'static)) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 	use super::*;
 	use std::fmt;
+
+	/// Capture the real logger, stdout, stderr and panic hook in an isolated test process.
+	pub(crate) fn capture_diagnostic_test(name: &str, expected: &str) -> bool {
+		const CHILD: &str = "STEAMGUARD_DIAGNOSTIC_TEST_CHILD";
+		if std::env::var(CHILD).as_deref() == Ok(name) {
+			stderrlog::new().verbosity(5).init().unwrap();
+			return false;
+		}
+		use std::process::{Command, Stdio};
+		let child = Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", name, "--nocapture"])
+			.env(CHILD, name)
+			.env("TMPDIR", "/private/tmp")
+			.stdin(Stdio::null())
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped())
+			.spawn()
+			.unwrap();
+		let output = child.wait_with_output().unwrap();
+		let diagnostic = format!(
+			"{}{}",
+			String::from_utf8_lossy(&output.stdout),
+			String::from_utf8_lossy(&output.stderr)
+		);
+		assert!(
+			!diagnostic.contains("canary"),
+			"CLI output exposed untrusted data"
+		);
+		// Preserve the sandbox failure classification without printing captured diagnostics.
+		assert!(
+			!diagnostic.contains("Operation not permitted"),
+			"loopback fixture blocked: EPERM"
+		);
+		assert!(output.status.success(), "diagnostic child failed");
+		assert!(
+			diagnostic.contains(expected),
+			"expected CLI diagnostic missing"
+		);
+		true
+	}
 
 	#[derive(thiserror::Error)]
 	struct Untrusted;
@@ -135,7 +175,10 @@ mod tests {
 		let malformed = serde_json::from_str::<bool>(r#""password-canary""#).unwrap_err();
 		let error = anyhow::Error::new(malformed).context("cookie-canary");
 		let diagnostic = safe_error(error.as_ref());
-		assert!(diagnostic.contains("Invalid JSON"));
+		assert!(
+			diagnostic.contains("Invalid JSON"),
+			"sensitive assertion failed"
+		);
 		assert!(
 			!diagnostic.contains("canary"),
 			"error reporter exposed a secret"

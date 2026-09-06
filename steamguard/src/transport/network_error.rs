@@ -269,14 +269,15 @@ mod tests {
 			.unwrap_err();
 		let error = NetworkError::from(error);
 
-		assert_eq!(
-			error.kind(),
-			NetworkErrorKind::Connection,
-			"{}",
-			super::super::tests::error_facts(&error)
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Connection),
+			"test invariant failed"
 		);
-		assert_eq!(error.sent(), RequestSent::Maybe);
-		assert!(error.source().is_some());
+		assert!(
+			(error.sent()) == (RequestSent::Maybe),
+			"sensitive assertion failed"
+		);
+		assert!(error.source().is_some(), "sensitive assertion failed");
 	}
 
 	#[test]
@@ -298,8 +299,14 @@ mod tests {
 		let error = client.get(format!("http://{address}")).send().unwrap_err();
 		let error = NetworkError::from(error);
 
-		assert_eq!(error.kind(), NetworkErrorKind::Timeout);
-		assert_eq!(error.sent(), RequestSent::Maybe);
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Timeout),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.sent()) == (RequestSent::Maybe),
+			"sensitive assertion failed"
+		);
 		server.join().unwrap();
 	}
 
@@ -320,7 +327,10 @@ mod tests {
 			.unwrap_err();
 		let error = NetworkError::from(error);
 
-		assert_eq!(error.kind(), NetworkErrorKind::Tls);
+		assert!(
+			(error.kind()) == (NetworkErrorKind::Tls),
+			"sensitive assertion failed"
+		);
 		server.join().unwrap();
 	}
 
@@ -358,11 +368,14 @@ mod tests {
 				sent: RequestSent::Maybe,
 				source: Some(Box::new(std::io::Error::other(Untrusted))),
 			};
-			assert!(error_chain_contains::<Untrusted>(&error));
+			assert!(
+				error_chain_contains::<Untrusted>(&error),
+				"sensitive assertion failed"
+			);
 			let diagnostic = format!("{error} {error:?}");
 			let diagnostic = format!("{diagnostic} {:?}", TransportError::NetworkFailure(error));
 			for canary in ["://", "proxy-user", "proxy-password", "source-canary"] {
-				assert!(!diagnostic.contains(canary));
+				assert!(!diagnostic.contains(canary), "sensitive assertion failed");
 			}
 		}
 		for error in [
@@ -372,16 +385,25 @@ mod tests {
 				source: anyhow::Error::new(Untrusted),
 			},
 		] {
-			assert!(!format!("{error} {error:?}").contains("header-canary"));
+			assert!(
+				!format!("{error} {error:?}").contains("header-canary"),
+				"sensitive assertion failed"
+			);
 		}
 		let tls = std::io::Error::other(rustls::Error::InvalidCertificate(
 			rustls::CertificateError::UnknownIssuer,
 		));
-		assert!(error_chain_contains::<rustls::Error>(&tls));
-		assert_eq!(NetworkError::invalid_request().sent(), RequestSent::No);
-		assert_eq!(
-			NetworkError::unsupported_transport().sent(),
-			RequestSent::No
+		assert!(
+			error_chain_contains::<rustls::Error>(&tls),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(NetworkError::invalid_request().sent()) == (RequestSent::No),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(NetworkError::unsupported_transport().sent()) == (RequestSent::No),
+			"sensitive assertion failed"
 		);
 	}
 
@@ -411,7 +433,10 @@ mod tests {
 				.send()
 				.unwrap();
 			let error = NetworkError::ensure_success(response).unwrap_err();
-			assert_eq!(error.retry_after().unwrap().as_bytes(), retry);
+			assert!(
+				(error.retry_after().unwrap().as_bytes()) == (retry),
+				"sensitive assertion failed"
+			);
 			let diagnostic = format!("{error} {error:?}");
 			for canary in [
 				"://",
@@ -454,15 +479,33 @@ mod tests {
 			.unwrap();
 		let error = NetworkError::ensure_success(response).unwrap_err();
 
-		assert_eq!(error.kind(), NetworkErrorKind::HttpStatus);
-		assert_eq!(error.sent(), RequestSent::Yes);
-		assert_eq!(error.status(), Some(StatusCode::TOO_MANY_REQUESTS));
-		assert_eq!(error.retry_after().unwrap(), "120");
-		assert!(error.source().is_some());
+		assert!(
+			(error.kind()) == (NetworkErrorKind::HttpStatus),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.sent()) == (RequestSent::Yes),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.status()) == (Some(StatusCode::TOO_MANY_REQUESTS)),
+			"sensitive assertion failed"
+		);
+		assert!(
+			(error.retry_after().unwrap()) == ("120"),
+			"sensitive assertion failed"
+		);
+		assert!(error.source().is_some(), "sensitive assertion failed");
 		let output = format!("{error:?} {error}");
-		assert!(!output.contains("query-secret-canary"));
+		assert!(
+			!output.contains("query-secret-canary"),
+			"sensitive assertion failed"
+		);
 		let source_output = error.source().unwrap().to_string();
-		assert!(!source_output.contains("query-secret-canary"));
+		assert!(
+			!source_output.contains("query-secret-canary"),
+			"sensitive assertion failed"
+		);
 		server.join().unwrap();
 	}
 

@@ -126,28 +126,31 @@ fn assert_safe(error: &dyn Error) {
 			"wrapper-context-canary",
 			"://",
 		] {
-			assert!(
-				!diagnostic.contains(canary),
-				"outer diagnostic leaked {canary}: {diagnostic}"
-			);
+			assert!(!diagnostic.contains(canary), "sensitive assertion failed");
 		}
 	}
 }
 
 fn assert_http(error: &(dyn Error + 'static), status: u16) {
 	let network = source::<NetworkError>(error).expect("caller lost typed NetworkError source");
-	assert_eq!(network.kind(), NetworkErrorKind::HttpStatus);
+	assert!(
+		(network.kind()) == (NetworkErrorKind::HttpStatus),
+		"sensitive assertion failed"
+	);
 	assert_eq!(network.status().unwrap().as_u16(), status);
-	assert_eq!(
-		network.retry_after().unwrap().as_bytes(),
-		b"wire-retry-canary"
+	assert!(
+		(network.retry_after().unwrap().as_bytes()) == (b"wire-retry-canary"),
+		"sensitive assertion failed"
 	);
 	assert_eq!(network.sent(), RequestSent::Yes);
 	if status >= 400 {
 		let original = source::<reqwest::Error>(error).expect("caller lost reqwest source");
 		assert_eq!(original.status().unwrap().as_u16(), status);
 		// Synthetic-only inspection proves the original untrusted reason was retained internally.
-		assert!(original.to_string().contains("wire-reason-canary"));
+		assert!(
+			original.to_string().contains("wire-reason-canary"),
+			"sensitive assertion failed"
+		);
 	}
 }
 
@@ -228,11 +231,15 @@ fn confirmation_diagnostics_hide_messages_and_parse_sources() {
 		server.join().unwrap();
 		if remote {
 			assert!(
-				matches!(&error, ConfirmerError::RemoteFailureWithMessage(message) if message == "message-value-canary")
+				matches!(&error, ConfirmerError::RemoteFailureWithMessage(message) if message == "message-value-canary"),
+				"sensitive assertion failed"
 			);
 		} else {
 			let original = source::<serde_path_to_error::Error<serde_json::Error>>(&error).unwrap();
-			assert!(original.to_string().contains("parse-value-canary"));
+			assert!(
+				original.to_string().contains("parse-value-canary"),
+				"sensitive assertion failed"
+			);
 		}
 		assert_safe(&error);
 	}
@@ -343,9 +350,9 @@ fn login_error_delegates_tls_source() {
 		has_untrusted_certificate(&error),
 		"login lost typed UnknownIssuer"
 	);
-	assert_eq!(
-		source::<NetworkError>(&error).unwrap().sent(),
-		RequestSent::No
+	assert!(
+		(source::<NetworkError>(&error).unwrap().sent()) == (RequestSent::No),
+		"sensitive assertion failed"
 	);
 }
 
@@ -491,4 +498,40 @@ fn adjacent_linking_errors_keep_safe_transport_diagnostics() {
 		assert_http(error.as_ref(), 429);
 		assert_safe(error.as_ref());
 	}
+}
+
+#[test]
+fn redaction_assertion_failure_output_is_fixed() {
+	const CHILD: &str = "STEAMGUARD_ASSERTION_FAILURE_CHILD";
+	if std::env::var_os(CHILD).is_some() {
+		let error = std::io::Error::other("wire-reason-canary");
+		assert!(
+			std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| assert_safe(&error))).is_err(),
+			"deliberate disclosure did not fail the assertion"
+		);
+		return;
+	}
+	let output = Command::new(std::env::current_exe().unwrap())
+		.args([
+			"--exact",
+			"transport::tests::callers::redaction_assertion_failure_output_is_fixed",
+			"--nocapture",
+		])
+		.env(CHILD, "1")
+		.output()
+		.unwrap();
+	let diagnostic = format!(
+		"{}{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+	assert!(
+		!diagnostic.contains("canary"),
+		"assertion failure exposed a secret"
+	);
+	assert!(output.status.success(), "assertion fixture child failed");
+	assert!(
+		diagnostic.contains("sensitive assertion failed"),
+		"expected assertion failure missing"
+	);
 }
