@@ -45,8 +45,15 @@ where
 						) {
 							Ok(accounts) => accounts,
 							Err(err) => {
-								error!("Failed to import account: {} {}", &file_path, err);
-								error!("The original error was: {}", orig_err);
+								error!(
+									"Failed to import account: {} {}",
+									&file_path,
+									crate::errors::safe_error(err.as_ref())
+								);
+								error!(
+									"The original error was: {}",
+									crate::errors::safe_error(&orig_err)
+								);
 								continue;
 							}
 						};

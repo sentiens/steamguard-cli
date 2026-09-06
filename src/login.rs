@@ -123,7 +123,10 @@ fn do_login_impl<T: Transport + Clone>(
 				bail!("Login session expired.");
 			}
 			Err(err) => {
-				error!("Unexpected error when trying to log in. If you report this as a bug, please rerun with `-v debug` or `-v trace` and include all output in your issue. {:?}", err);
+				error!(
+					"Unexpected error when trying to log in: {}",
+					crate::errors::safe_error(&err)
+				);
 				return Err(err.into());
 			}
 		}
@@ -192,7 +195,10 @@ fn do_login_impl<T: Transport + Clone>(
 						Ok(_) => break,
 						Err(err) => {
 							if !matches!(err, UpdateAuthSessionError::DuplicateRequest) {
-								error!("Failed to submit code: {}", err);
+								error!(
+									"Failed to submit code: {}",
+									crate::errors::safe_error(&err)
+								);
 							}
 
 							match err {

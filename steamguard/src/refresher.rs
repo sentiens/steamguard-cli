@@ -1,5 +1,8 @@
 use crate::{
-	protobufs::steammessages_auth_steamclient::CAuthentication_AccessToken_GenerateForApp_Request,
+	protobufs::steammessages_auth_steamclient::{
+		CAuthentication_AccessToken_GenerateForApp_Request,
+		CAuthentication_AccessToken_GenerateForApp_Response,
+	},
 	steamapi::{AuthenticationClient, EResult},
 	token::{Jwt, Tokens},
 	transport::{Transport, TransportError},
@@ -47,18 +50,24 @@ where
 			return Err(RefreshError::SteamRejected(resp.result));
 		}
 
-		let mut resp = resp.into_response_data();
-
-		if resp.access_token().is_empty() {
-			return Err(RefreshError::MalformedResponse);
-		}
-		let refresh_token = match resp.refresh_token.take() {
-			Some(token) if token.is_empty() => return Err(RefreshError::MalformedResponse),
-			Some(token) => token.into(),
-			None => tokens.refresh_token().clone(),
-		};
-		Ok(Tokens::new(resp.take_access_token(), refresh_token))
+		tokens_from_response(resp.into_response_data(), tokens.refresh_token())
 	}
+}
+
+/// Applies the same token-presence rules to explicit refresh and refresh-only login polling.
+pub(crate) fn tokens_from_response(
+	mut response: CAuthentication_AccessToken_GenerateForApp_Response,
+	current_refresh: &Jwt,
+) -> Result<Tokens, RefreshError> {
+	if response.access_token().is_empty() {
+		return Err(RefreshError::MalformedResponse);
+	}
+	let refresh_token = match response.refresh_token.take() {
+		Some(token) if token.is_empty() => return Err(RefreshError::MalformedResponse),
+		Some(token) => token.into(),
+		None => current_refresh.clone(),
+	};
+	Ok(Tokens::new(response.take_access_token(), refresh_token))
 }
 
 #[derive(Debug, thiserror::Error)]

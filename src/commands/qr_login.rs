@@ -70,7 +70,7 @@ where
 					crate::do_login(transport.clone(), &mut account, args.password.clone())?;
 				}
 				Err(e) => {
-					error!("Failed to approve login: {}", e);
+					error!("Failed to approve login: {}", crate::errors::safe_error(&e));
 					break;
 				}
 			}

@@ -363,22 +363,31 @@ where
 
 		let cookie = self.build_cookie_header()?;
 
-		let time = self.server_time()?;
-		let query_params = self.get_confirmation_query_params("details", time)?;
+		let time = self.server_time().map_err(ConfirmerError::from)?;
+		let query_params = self
+			.get_confirmation_query_params("details", time)
+			.map_err(ConfirmerError::from)?;
 
-		let resp = self.transport.send_web(WebRequest::new(
-			WebEndpoint::ConfirmationDetails(conf.into().id),
-			&query_params,
-			CONFIRMATION_USER_AGENT,
-			&cookie,
-			ACCEPT_LANGUAGE,
-		))?;
+		let resp = self
+			.transport
+			.send_web(WebRequest::new(
+				WebEndpoint::ConfirmationDetails(conf.into().id),
+				&query_params,
+				CONFIRMATION_USER_AGENT,
+				&cookie,
+				ACCEPT_LANGUAGE,
+			))
+			.map_err(ConfirmerError::from)?;
 
 		let text = resp.into_body();
+		let mut deserializer = serde_json::Deserializer::from_str(&text);
 		let body: ConfirmationDetailsResponse =
-			serde_json::from_str(&text).map_err(ConfirmerError::from)?;
+			deserialize_object(&mut deserializer).map_err(ConfirmerError::from)?;
+		deserializer.end().map_err(ConfirmerError::from)?;
 
-		ensure!(body.success);
+		if !body.success {
+			return Err(ConfirmerError::RemoteFailure.into());
+		}
 		Ok(body.html)
 	}
 }
@@ -398,22 +407,64 @@ impl ConfirmationAction {
 	}
 }
 
-#[derive(thiserror::Error)]
+/// Public diagnostics stop at this error. Original causes are available only through
+/// [`Self::raw_source`] or the enum payloads for typed inspection.
 pub enum ConfirmerError {
-	#[error("Invalid tokens, login or token refresh required.")]
 	InvalidTokens,
-	#[error("Could not build the Steam Community cookie header")]
 	InvalidCookieHeader,
-	#[error("Network failure: {0}")]
-	NetworkFailure(#[from] NetworkError),
-	#[error("Failed to deserialize confirmation response")]
-	DeserializeError(#[from] serde_path_to_error::Error<serde_json::Error>),
-	#[error("Remote failure: Valve's server responded with a failure and did not elaborate any further. This is likely not a steamguard-cli bug, Steam's confirmation API is just unreliable. Wait a bit and try again.")]
+	NetworkFailure(NetworkError),
+	DeserializeError(serde_path_to_error::Error<serde_json::Error>),
 	RemoteFailure,
-	#[error("Remote failure: Valve's server rejected the request")]
 	RemoteFailureWithMessage(String),
-	#[error("Unexpected confirmation error")]
-	Unknown(#[from] anyhow::Error),
+	Unknown(anyhow::Error),
+}
+
+impl ConfirmerError {
+	/// Original cause for downcasting and inspecting typed facts. Never format this value
+	/// or its source chain: remote messages and library causes may contain credentials.
+	pub fn raw_source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+		match self {
+			Self::NetworkFailure(error) => Some(error),
+			Self::DeserializeError(error) => Some(error),
+			Self::Unknown(error) => Some(error.as_ref()),
+			_ => None,
+		}
+	}
+}
+
+// Returning raw causes from Error::source would let anyhow and other reporters format them.
+impl std::error::Error for ConfirmerError {}
+
+impl fmt::Display for ConfirmerError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::InvalidTokens => f.write_str("Invalid tokens, login or token refresh required."),
+			Self::InvalidCookieHeader => f.write_str("Could not build the Steam Community cookie header"),
+			Self::NetworkFailure(error) => write!(f, "Network failure: {error}"),
+			Self::DeserializeError(_) => f.write_str("Failed to deserialize confirmation response"),
+			Self::RemoteFailure => f.write_str("Remote failure: Valve's server responded with a failure and did not elaborate any further. This is likely not a steamguard-cli bug, Steam's confirmation API is just unreliable. Wait a bit and try again."),
+			Self::RemoteFailureWithMessage(_) => f.write_str("Remote failure: Valve's server rejected the request"),
+			Self::Unknown(_) => f.write_str("Unexpected confirmation error"),
+		}
+	}
+}
+
+impl From<NetworkError> for ConfirmerError {
+	fn from(error: NetworkError) -> Self {
+		Self::NetworkFailure(error)
+	}
+}
+
+impl From<serde_path_to_error::Error<serde_json::Error>> for ConfirmerError {
+	fn from(error: serde_path_to_error::Error<serde_json::Error>) -> Self {
+		Self::DeserializeError(error)
+	}
+}
+
+impl From<anyhow::Error> for ConfirmerError {
+	fn from(error: anyhow::Error) -> Self {
+		Self::Unknown(error)
+	}
 }
 
 impl fmt::Debug for ConfirmerError {
@@ -454,10 +505,30 @@ where
 	Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Admit only maps, then let the derived parser enforce field types and duplicate rejection.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+	D: Deserializer<'de>,
+	T: Deserialize<'de>,
+{
+	struct ObjectVisitor<T>(std::marker::PhantomData<T>);
+	impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for ObjectVisitor<T> {
+		type Value = T;
+
+		fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+			f.write_str("a confirmation response object")
+		}
+
+		fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<T, M::Error> {
+			T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+		}
+	}
+	deserializer.deserialize_map(ObjectVisitor(std::marker::PhantomData))
+}
+
 /// A mobile confirmation. There are multiple things that can be confirmed, like trade offers.
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Confirmation {
-	#[serde(rename = "type")]
 	pub conf_type: ConfirmationType,
 	pub type_name: String,
 	pub id: String,
@@ -465,18 +536,58 @@ pub struct Confirmation {
 	pub creator_id: String,
 	pub nonce: String,
 	pub creation_time: u64,
-	#[serde(default, deserialize_with = "default_if_null")]
 	pub cancel: String,
-	#[serde(default, deserialize_with = "default_if_null")]
 	pub accept: String,
 	pub icon: Option<String>,
-	#[serde(default, deserialize_with = "default_if_null")]
 	pub multi: bool,
 	pub headline: String,
 	pub summary: Vec<String>,
 	/// Steam's warning text. The field must be present, but may be null.
-	#[serde(deserialize_with = "Option::deserialize")]
 	pub warn: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Confirmation {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		#[derive(Deserialize)]
+		struct Fields {
+			#[serde(rename = "type")]
+			conf_type: ConfirmationType,
+			type_name: String,
+			id: String,
+			/// Trade offer ID or market transaction ID
+			creator_id: String,
+			nonce: String,
+			creation_time: u64,
+			#[serde(default, deserialize_with = "default_if_null")]
+			cancel: String,
+			#[serde(default, deserialize_with = "default_if_null")]
+			accept: String,
+			icon: Option<String>,
+			#[serde(default, deserialize_with = "default_if_null")]
+			multi: bool,
+			headline: String,
+			summary: Vec<String>,
+			/// Steam's warning text. The field must be present, but may be null.
+			#[serde(deserialize_with = "Option::deserialize")]
+			warn: Option<String>,
+		}
+		let fields: Fields = deserialize_object(deserializer)?;
+		Ok(Self {
+			conf_type: fields.conf_type,
+			type_name: fields.type_name,
+			id: fields.id,
+			creator_id: fields.creator_id,
+			nonce: fields.nonce,
+			creation_time: fields.creation_time,
+			cancel: fields.cancel,
+			accept: fields.accept,
+			icon: fields.icon,
+			multi: fields.multi,
+			headline: fields.headline,
+			summary: fields.summary,
+			warn: fields.warn,
+		})
+	}
 }
 
 impl fmt::Debug for Confirmation {
@@ -584,7 +695,7 @@ impl<'de> Deserialize<'de> for ConfirmationListResponse {
 			message: Option<String>,
 		}
 
-		let response = Response::deserialize(deserializer)?;
+		let response: Response = deserialize_object(deserializer)?;
 		if response.success && response.needauth == Some(true) {
 			return Err(serde::de::Error::custom(
 				"confirmation response has contradictory success and authentication status",
@@ -634,7 +745,7 @@ impl<'de> Deserialize<'de> for SendConfirmationResponse {
 			message: Option<String>,
 		}
 
-		let response = Response::deserialize(deserializer)?;
+		let response: Response = deserialize_object(deserializer)?;
 		if response.success && response.needsauth == Some(true) {
 			return Err(serde::de::Error::custom(
 				"confirmation response has contradictory success and authentication status",
@@ -765,7 +876,7 @@ mod tests {
 			assert_eq!(confirmation.type_name, item["type_name"]);
 			assert_eq!(confirmation.id, item["id"]);
 			assert_eq!(confirmation.creator_id, item["creator_id"]);
-			assert_eq!(confirmation.nonce, item["nonce"]);
+			assert!(confirmation.nonce == item["nonce"], "secret values differ");
 			assert_eq!(confirmation.creation_time, item["creation_time"]);
 			assert_eq!(confirmation.cancel, item["cancel"]);
 			assert_eq!(confirmation.accept, item["accept"]);
@@ -874,7 +985,10 @@ mod tests {
 		};
 
 		assert_eq!(value("t"), Some("1617591917"));
-		assert_eq!(value("k"), Some("NaL8EIMhfy/7vBounJ0CvpKbrPk="));
+		assert!(
+			value("k") == Some("NaL8EIMhfy/7vBounJ0CvpKbrPk="),
+			"secret values differ"
+		);
 	}
 
 	#[test]

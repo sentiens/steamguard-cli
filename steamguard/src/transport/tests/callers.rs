@@ -7,6 +7,7 @@ use crate::{
 	accountlinker::AccountLinker,
 	protobufs::steammessages_auth_steamclient::{
 		CAuthentication_BeginAuthSessionViaCredentials_Response,
+		CAuthentication_BeginAuthSessionViaQR_Response,
 		CAuthentication_GetPasswordRSAPublicKey_Response, EAuthSessionGuardType,
 		EAuthTokenPlatformType,
 	},
@@ -87,6 +88,9 @@ fn failure(path: &'static str) -> (WebApiTransport, thread::JoinHandle<()>) {
 fn source<'a, T: Error + 'static>(error: &'a (dyn Error + 'static)) -> Option<&'a T> {
 	if let Some(value) = error.downcast_ref::<T>() {
 		return Some(value);
+	}
+	if let Some(error) = error.downcast_ref::<ConfirmerError>() {
+		return error.raw_source().and_then(source::<T>);
 	}
 	if let Some(inner) = error
 		.downcast_ref::<std::io::Error>()
@@ -358,6 +362,7 @@ fn update_auth_error_delegates_http_source() {
 	rsa.set_timestamp(1);
 	let mut started = CAuthentication_BeginAuthSessionViaCredentials_Response::new();
 	started.set_client_id(1);
+	started.set_request_id(b"request-id-canary".to_vec());
 	started.set_steamid(7_656_119_900_000_001);
 	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 	let transport = proxied(&listener);
@@ -428,7 +433,15 @@ fn login_and_update_other_failures_retain_sources() {
 
 	let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 	let transport = proxied(&listener);
-	let server = serve(listener, "/BeginAuthSessionViaQR/v1", response(200, &[]));
+	let mut started = CAuthentication_BeginAuthSessionViaQR_Response::new();
+	started.set_client_id(1);
+	started.set_request_id(b"request-id-canary".to_vec());
+	started.set_challenge_url("challenge-url-canary".to_owned());
+	let server = serve(
+		listener,
+		"/BeginAuthSessionViaQR/v1",
+		response(200, &started.write_to_bytes().unwrap()),
+	);
 	let mut login = login(transport);
 	login.begin_auth_via_qr().unwrap();
 	server.join().unwrap();

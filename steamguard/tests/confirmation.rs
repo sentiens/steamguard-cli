@@ -123,6 +123,154 @@ fn assert_safe_error(error: &(dyn Error + 'static)) {
 }
 
 #[test]
+fn malformed_confirmation_anyhow_diagnostics_are_redacted() {
+	for body in [
+		r#"{"success":"password-canary"}"#,
+		r#"{"success":true,"conf":[{"type":"nonce-canary"}]}"#,
+	] {
+		let error =
+			anyhow::Error::new(get_list(body).unwrap_err()).context("checking confirmations");
+		for output in [
+			format!("{error:?}"),
+			format!("{error:#}"),
+			format!("{error:#?}"),
+		] {
+			assert_safe_text(&output);
+		}
+		let original = error
+			.downcast_ref::<ConfirmerError>()
+			.unwrap()
+			.raw_source()
+			.unwrap();
+		assert!(
+			original.is::<serde_path_to_error::Error<serde_json::Error>>(),
+			"typed parse cause was lost"
+		);
+	}
+}
+
+#[test]
+fn malformed_confirmation_details_anyhow_diagnostics_are_redacted() {
+	let transport =
+		FakeTransport::new([r#"{"success":"password-canary","html":"cookie-canary"}"#.to_owned()]);
+	let account = account();
+	let error = Confirmer::new(transport.clone(), &account)
+		.with_server_time(0)
+		.get_confirmation_details(ConfirmationId::new("id", "nonce-canary"))
+		.unwrap_err();
+	for output in [
+		format!("{error:?}"),
+		format!("{error:#}"),
+		format!("{error:#?}"),
+	] {
+		assert_safe_text(&output);
+	}
+	assert!(error.downcast_ref::<ConfirmerError>().is_some());
+	transport.assert_finished();
+}
+
+#[test]
+fn wrapped_confirmation_causes_are_redacted() {
+	struct InvalidQuery;
+	impl serde::Serialize for InvalidQuery {
+		fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+			Err(serde::ser::Error::custom(SECRETS))
+		}
+	}
+	let request_error = reqwest::blocking::Client::builder()
+		.no_proxy()
+		.build()
+		.unwrap()
+		.get("https://example.invalid")
+		.query(&InvalidQuery)
+		.build()
+		.unwrap_err();
+	for cause in [
+		ConfirmerError::from(request_error),
+		ConfirmerError::Unknown(anyhow::anyhow!(SECRETS).context("local context")),
+	] {
+		let error = anyhow::Error::new(cause).context("checking confirmations");
+		for output in [
+			format!("{error:?}"),
+			format!("{error:#}"),
+			format!("{error:#?}"),
+		] {
+			assert_safe_text(&output);
+		}
+	}
+}
+
+#[test]
+fn positional_confirmation_envelopes_are_rejected() {
+	assert!(
+		matches!(
+			get_list("[true,null,[],null]"),
+			Err(ConfirmerError::DeserializeError(_))
+		),
+		"positional list envelope accepted"
+	);
+	let transport = FakeTransport::new(
+		["[true,null,null]", "[true,null,null]", "[true,\"html\"]"].map(str::to_owned),
+	);
+	let account = account();
+	let confirmer = Confirmer::new(transport.clone(), &account).with_server_time(0);
+	let item = get_list(MINIMAL).unwrap().remove(0);
+	assert!(
+		matches!(
+			confirmer.accept_confirmation(&item),
+			Err(ConfirmerError::DeserializeError(_))
+		),
+		"positional action envelope accepted"
+	);
+	assert!(
+		matches!(
+			confirmer.deny_confirmations_bulk(std::slice::from_ref(&item)),
+			Err(ConfirmerError::DeserializeError(_))
+		),
+		"positional bulk envelope accepted"
+	);
+	assert!(
+		confirmer.get_confirmation_details(&item).is_err(),
+		"positional details envelope accepted"
+	);
+	transport.assert_finished();
+}
+
+#[test]
+fn positional_confirmation_items_are_rejected() {
+	let item = r#"[2,"Trade","id","creator","nonce-canary",1,"Cancel","Accept",null,false,"Headline",[],null]"#;
+	assert!(
+		serde_json::from_str::<Confirmation>(item).is_err(),
+		"positional confirmation item accepted"
+	);
+	assert!(
+		matches!(
+			get_list(format!(r#"{{"success":true,"conf":[{item}]}}"#)),
+			Err(ConfirmerError::DeserializeError(_))
+		),
+		"nested positional item accepted"
+	);
+}
+
+#[test]
+fn object_confirmation_duplicate_fields_remain_rejected() {
+	for body in [
+		r#"{"success":true,"success":true,"conf":[]}"#,
+		r#"{"success":true,"conf":[],"conf":[]}"#,
+		r#"{"success":true,"conf":[{"type":2,"type_name":"Trade","id":"id","creator_id":"creator","nonce":"nonce-canary","nonce":"nonce-canary","creation_time":1,"headline":"Headline","summary":[],"warn":null}]}"#,
+	] {
+		assert!(
+			matches!(get_list(body), Err(ConfirmerError::DeserializeError(_))),
+			"duplicate confirmation field accepted"
+		);
+	}
+	assert!(
+		serde_json::from_str::<SendConfirmationResponse>(r#"{"success":true,"success":true}"#)
+			.is_err()
+	);
+}
+
+#[test]
 fn well_formed_list_is_parsed() {
 	let confirmations = get_list(COMPLETE).unwrap();
 	assert_eq!(
@@ -239,7 +387,10 @@ fn unknown_confirmation_type_is_preserved() {
 		ConfirmationType::Unknown(987654)
 	);
 	assert_eq!(confirmations[0].id, "40000000004");
-	assert_eq!(confirmations[0].nonce, "60000000006");
+	assert!(
+		confirmations[0].nonce == "60000000006",
+		"secret values differ"
+	);
 	assert_eq!(confirmations[1].conf_type, ConfirmationType::Trade);
 	assert_eq!(confirmations[1].id, "40000000005");
 	assert_eq!(confirmations[1].warn.as_deref(), Some("Verify this trade"));
@@ -293,11 +444,11 @@ fn server_time_is_taken_from_caller() {
 			.unwrap();
 		confirmer.accept_confirmations_bulk(&confirmations).unwrap();
 		confirmer.deny_confirmations_bulk(&confirmations).unwrap();
-		assert_eq!(
+		assert!(
 			confirmer
 				.get_confirmation_details(&confirmations[0])
-				.unwrap(),
-			"body-canary"
+				.unwrap() == "body-canary",
+			"secret values differ"
 		);
 		transport.assert_finished();
 		let requests = transport.requests.borrow();
@@ -331,13 +482,16 @@ fn server_time_is_taken_from_caller() {
 			};
 			assert_eq!(value("t"), Some(time.to_string().as_str()));
 			assert_eq!(value("a"), Some("76561198000000001"));
-			assert_eq!(value("p"), Some("android:device-id-canary"));
+			assert!(
+				value("p") == Some("android:device-id-canary"),
+				"secret values differ"
+			);
 			assert_eq!(value("m"), Some("react"));
 			let details = endpoint == "confirmation-details";
 			assert_eq!(value("tag"), Some(if details { "details" } else { "conf" }));
-			assert_eq!(
-				value("k"),
-				Some(if details { details_hash } else { conf_hash })
+			assert!(
+				value("k") == Some(if details { details_hash } else { conf_hash }),
+				"secret values differ"
 			);
 		}
 	}
@@ -351,8 +505,8 @@ fn confirmation_debug_redacts_nonce() {
 	let id = ConfirmationId::new(&confirmation.id, &confirmation.nonce);
 	let from = ConfirmationId::from(&confirmation);
 	assert_eq!(id.id, from.id);
-	assert_eq!(id.nonce, from.nonce);
-	assert_eq!(from.nonce, "nonce-canary");
+	assert!(id.nonce == from.nonce, "secret values differ");
+	assert!(from.nonce == "nonce-canary", "secret values differ");
 	for output in [
 		format!("{confirmation:?}"),
 		format!("{id:?}"),
@@ -368,8 +522,14 @@ fn response_debug_has_no_secrets() {
 	let body = json!({"success":false,"message":SECRETS,"body":SECRETS}).to_string();
 	let send: SendConfirmationResponse = serde_json::from_str(&body).unwrap();
 	let list: ConfirmationListResponse = serde_json::from_str(&body).unwrap();
-	assert_eq!(send.message.as_deref(), Some(SECRETS));
-	assert_eq!(list.message.as_deref(), Some(SECRETS));
+	assert!(
+		send.message.as_deref() == Some(SECRETS),
+		"secret values differ"
+	);
+	assert!(
+		list.message.as_deref() == Some(SECRETS),
+		"secret values differ"
+	);
 	let web = WebResponse::new(200, &body);
 	for output in [format!("{send:?}"), format!("{list:?}"), format!("{web:?}")] {
 		assert_safe_text(&output);

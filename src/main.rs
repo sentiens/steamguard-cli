@@ -46,13 +46,7 @@ fn main() {
 	#[cfg(feature = "updater")]
 	let should_do_update_check = !args.global.no_update_check;
 
-	let exit_code = match run(args) {
-		Ok(_) => 0,
-		Err(e) => {
-			error!("{:?}", e);
-			255
-		}
-	};
+	let exit_code = report_result(run(args));
 
 	#[cfg(feature = "updater")]
 	if should_do_update_check {
@@ -68,12 +62,25 @@ fn main() {
 				debug!("No update available");
 			}
 			Err(e) => {
-				warn!("Failed to check for updates: {}", e);
+				warn!(
+					"Failed to check for updates: {}",
+					crate::errors::safe_error(e.as_ref())
+				);
 			}
 		}
 	}
 
 	std::process::exit(exit_code);
+}
+
+fn report_result(result: anyhow::Result<()>) -> i32 {
+	match result {
+		Ok(_) => 0,
+		Err(e) => {
+			error!("{}", crate::errors::safe_error(e.as_ref()));
+			255
+		}
+	}
 }
 
 fn run(args: commands::Args) -> anyhow::Result<()> {
@@ -165,7 +172,10 @@ fn run(args: commands::Args) -> anyhow::Result<()> {
 							passkey = Some(tui::prompt_passkey()?);
 						}
 						Err(e) => {
-							error!("Failed to migrate manifest: {}", e);
+							error!(
+								"Failed to migrate manifest: {}",
+								crate::errors::safe_error(&e)
+							);
 							return Err(e.into());
 						}
 					}
@@ -177,7 +187,10 @@ fn run(args: commands::Args) -> anyhow::Result<()> {
 				manager
 			}
 			Err(err) => {
-				error!("Failed to load manifest: {}", err);
+				error!(
+					"Failed to load manifest: {}",
+					crate::errors::safe_error(&err)
+				);
 				return Err(err.into());
 			}
 		}
@@ -190,7 +203,10 @@ fn run(args: commands::Args) -> anyhow::Result<()> {
 			match encryption::try_passkey_from_keyring(keyring_id.clone()) {
 				Ok(k) => passkey = k,
 				Err(e) => {
-					warn!("Failed to load encryption passkey from keyring: {}", e);
+					warn!(
+						"Failed to load encryption passkey from keyring: {}",
+						crate::errors::safe_error(&e)
+					);
 				}
 			}
 		}
@@ -228,7 +244,7 @@ fn run(args: commands::Args) -> anyhow::Result<()> {
 				manager.submit_passkey(passkey);
 			}
 			Err(e) => {
-				error!("Could not load accounts: {}", e);
+				error!("Could not load accounts: {}", crate::errors::safe_error(&e));
 				return Err(e.into());
 			}
 		}
@@ -272,7 +288,7 @@ fn run(args: commands::Args) -> anyhow::Result<()> {
 				manager.submit_passkey(passkey);
 			}
 			Err(e) => {
-				error!("Could not load accounts: {}", e);
+				error!("Could not load accounts: {}", crate::errors::safe_error(&e));
 				return Err(e.into());
 			}
 		}

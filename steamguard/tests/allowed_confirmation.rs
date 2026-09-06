@@ -46,6 +46,9 @@ fn allowed_confirmation_is_public() {
 		),
 	];
 	let mut response = CAuthentication_BeginAuthSessionViaQR_Response::new();
+	response.set_client_id(123);
+	response.set_request_id(b"request-id-canary".to_vec());
+	response.set_challenge_url("challenge-url-canary".to_owned());
 	for (confirmation_type, message) in expected {
 		let mut confirmation = CAuthentication_AllowedConfirmation::new();
 		confirmation.set_confirmation_type(confirmation_type);

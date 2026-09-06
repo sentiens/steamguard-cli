@@ -27,7 +27,10 @@ where
 					info!("Cleared passkey from keyring");
 					manager.clear_keyring_id();
 				}
-				Err(e) => warn!("Failed to clear passkey from keyring: {}", e),
+				Err(e) => warn!(
+					"Failed to clear passkey from keyring: {}",
+					crate::errors::safe_error(&e)
+				),
 			}
 		}
 		for entry in manager.iter_mut() {
@@ -54,7 +57,7 @@ fn load_accounts_with_prompts(manager: &mut AccountManager) -> anyhow::Result<()
 				manager.submit_passkey(passkey);
 			}
 			Err(e) => {
-				error!("Could not load accounts: {}", e);
+				error!("Could not load accounts: {}", crate::errors::safe_error(&e));
 				return Err(e.into());
 			}
 		}

@@ -29,7 +29,7 @@ pub enum LoginError {
 	SessionExpired,
 	SessionNotStarted,
 	UnknownEResult(EResult),
-	/// Steam returned an incomplete token response or an unsupported login outcome.
+	/// Steam returned an incomplete session/token response or an unsupported login outcome.
 	UnknownOutcome,
 	AuthAlreadyStarted,
 	TransportError(TransportError),
@@ -219,9 +219,9 @@ where
 			return Err(resp.result.into());
 		}
 
-		debug!("auth session started");
 		let started_auth: StartAuth = resp.into_response_data().into();
-		started_auth.interval().map(poll_interval).transpose()?;
+		started_auth.validate()?;
+		debug!("auth session started");
 		let allowed_confirmations = started_auth
 			.allowed_confirmations()
 			.iter()
@@ -256,9 +256,9 @@ where
 				.collect(),
 		};
 
-		debug!("auth session started");
 		let started_auth: StartAuth = resp.into_response_data().into();
-		started_auth.interval().map(poll_interval).transpose()?;
+		started_auth.validate()?;
+		debug!("auth session started");
 		self.started_auth = Some(started_auth);
 
 		Ok(return_resp)
@@ -326,11 +326,11 @@ where
 			if resp.result != EResult::OK {
 				return Err(resp.result.into());
 			}
-			let mut data = resp.into_response_data();
-			if data.access_token().is_empty() {
-				return Err(LoginError::UnknownOutcome);
-			}
-			tokens.set_access_token(data.take_access_token().into());
+			tokens = crate::refresher::tokens_from_response(
+				resp.into_response_data(),
+				tokens.refresh_token(),
+			)
+			.map_err(|_| LoginError::UnknownOutcome)?;
 		}
 		Ok(PollOutcome::Tokens(tokens))
 	}
@@ -434,6 +434,19 @@ impl fmt::Debug for StartAuth {
 }
 
 impl StartAuth {
+	fn validate(&self) -> Result<(), LoginError> {
+		if self.client_id() == 0 || self.request_id().is_empty() {
+			return Err(LoginError::UnknownOutcome);
+		}
+		if let Self::BeginAuthSessionViaQR(response) = self {
+			if response.challenge_url().is_empty() {
+				return Err(LoginError::UnknownOutcome);
+			}
+		}
+		self.interval().map(poll_interval).transpose()?;
+		Ok(())
+	}
+
 	pub(crate) fn client_id(&self) -> u64 {
 		match self {
 			StartAuth::BeginAuthSessionViaCredentials(resp) => resp.client_id(),

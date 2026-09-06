@@ -162,8 +162,168 @@ fn assert_tokens(outcome: PollOutcome, refresh: &str) {
 	let PollOutcome::Tokens(tokens) = outcome else {
 		panic!("expected tokens");
 	};
-	assert_eq!(tokens.access_token().expose_secret(), ACCESS);
-	assert_eq!(tokens.refresh_token().expose_secret(), refresh);
+	assert!(
+		tokens.access_token().expose_secret() == ACCESS,
+		"secret values differ"
+	);
+	assert!(
+		tokens.refresh_token().expose_secret() == refresh,
+		"secret values differ"
+	);
+}
+
+#[test]
+fn secret_token_assertion_failures_are_redacted() {
+	const CHILD: &str = "FORK_FIX_01_TOKEN_ASSERTION_CHILD";
+	if let Ok(which) = std::env::var(CHILD) {
+		let tokens = if which == "access" {
+			Tokens::new("wrong-access-canary".to_owned(), REFRESH.to_owned())
+		} else {
+			Tokens::new(ACCESS.to_owned(), "wrong-refresh-canary".to_owned())
+		};
+		assert_tokens(PollOutcome::Tokens(tokens), REFRESH);
+		return;
+	}
+	for which in ["access", "refresh"] {
+		let output = std::process::Command::new(std::env::current_exe().unwrap())
+			.args([
+				"--exact",
+				"secret_token_assertion_failures_are_redacted",
+				"--nocapture",
+			])
+			.env(CHILD, which)
+			.output()
+			.unwrap();
+		assert!(
+			!output.status.success(),
+			"mismatched token comparison did not fail"
+		);
+		for bytes in [&output.stdout, &output.stderr] {
+			assert!(
+				!String::from_utf8_lossy(bytes).contains("canary"),
+				"token assertion output exposed a secret"
+			);
+		}
+	}
+}
+
+#[test]
+fn incomplete_qr_start_is_rejected_without_storing_session() {
+	for (client, request, challenge) in [
+		(None, None, None),
+		(
+			None,
+			Some(b"request-canary".to_vec()),
+			Some("challenge-canary"),
+		),
+		(
+			Some(0),
+			Some(b"request-canary".to_vec()),
+			Some("challenge-canary"),
+		),
+		(Some(123), None, Some("challenge-canary")),
+		(Some(123), Some(vec![]), Some("challenge-canary")),
+		(Some(123), Some(b"request-canary".to_vec()), None),
+		(Some(123), Some(b"request-canary".to_vec()), Some("")),
+	] {
+		let mut response = QrResponse::new();
+		response.client_id = client;
+		response.request_id = request;
+		response.challenge_url = challenge.map(str::to_owned);
+		let (mut login, transport) =
+			new_login(vec![Step::response::<QrRequest, _>(EResult::OK, response)]);
+		assert!(
+			matches!(login.begin_auth_via_qr(), Err(LoginError::UnknownOutcome)),
+			"incomplete QR start was accepted"
+		);
+		assert!(
+			matches!(login.poll_once(), Err(LoginError::SessionNotStarted)),
+			"malformed start stored a session"
+		);
+		assert_eq!(login.poll_interval(), None);
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn incomplete_credentials_start_is_rejected_without_storing_session() {
+	for (client, request) in [
+		(None, None),
+		(None, Some(b"request-canary".to_vec())),
+		(Some(0), Some(b"request-canary".to_vec())),
+		(Some(123), None),
+		(Some(123), Some(vec![])),
+	] {
+		let mut rsa = RsaResponse::new();
+		rsa.set_publickey_exp("010001".to_owned());
+		rsa.set_publickey_mod("ff".repeat(128));
+		rsa.set_timestamp(1);
+		let mut response = CredentialsResponse::new();
+		response.client_id = client;
+		response.request_id = request;
+		let (mut login, transport) = new_login(vec![
+			Step::response::<RsaRequest, _>(EResult::OK, rsa),
+			Step::response::<CredentialsRequest, _>(EResult::OK, response),
+		]);
+		assert!(
+			matches!(
+				login.begin_auth_via_credentials("synthetic-account", "password-canary"),
+				Err(LoginError::UnknownOutcome)
+			),
+			"incomplete credentials start was accepted"
+		);
+		assert!(
+			matches!(login.poll_once(), Err(LoginError::SessionNotStarted)),
+			"malformed start stored a session"
+		);
+		assert_eq!(login.poll_interval(), None);
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn refresh_only_poll_preserves_replacement_refresh_token() {
+	let mut generated = RefreshResponse::new();
+	generated.set_access_token(ACCESS.to_owned());
+	generated.set_refresh_token(REFRESH.to_owned());
+	let (mut login, transport) = started_login(
+		Some(5.0),
+		vec![
+			poll_step(refresh_only_response()),
+			Step::response::<RefreshRequest, _>(EResult::OK, generated),
+		],
+	);
+	let PollOutcome::Tokens(tokens) = login.poll_once().unwrap() else {
+		panic!("expected tokens")
+	};
+	assert!(
+		tokens.access_token().expose_secret() == ACCESS,
+		"generated access token differs"
+	);
+	assert!(
+		tokens.refresh_token().expose_secret() == REFRESH,
+		"replacement refresh token was discarded"
+	);
+	transport.assert_finished();
+}
+
+#[test]
+fn refresh_only_poll_rejects_empty_replacement_refresh_token() {
+	let mut generated = RefreshResponse::new();
+	generated.set_access_token(ACCESS.to_owned());
+	generated.set_refresh_token(String::new());
+	let (mut login, transport) = started_login(
+		Some(5.0),
+		vec![
+			poll_step(refresh_only_response()),
+			Step::response::<RefreshRequest, _>(EResult::OK, generated),
+		],
+	);
+	assert!(
+		matches!(login.poll_once(), Err(LoginError::UnknownOutcome)),
+		"empty replacement refresh token accepted"
+	);
+	transport.assert_finished();
 }
 
 fn assert_redacted(error: &(dyn Error + 'static), extra: &str) {

@@ -266,12 +266,18 @@ fn refresh_returns_new_refresh_token_when_present() {
 		let updated = refresher(transport.clone())
 			.refresh_tokens(account().steam_id, &original)
 			.unwrap();
-		assert_eq!(updated.access_token().expose_secret(), ACCESS);
-		assert_eq!(
-			updated.refresh_token().expose_secret(),
-			replacement.unwrap_or(OLD_REFRESH)
+		assert!(
+			updated.access_token().expose_secret() == ACCESS,
+			"secret values differ"
 		);
-		assert_eq!(original.refresh_token().expose_secret(), OLD_REFRESH);
+		assert!(
+			updated.refresh_token().expose_secret() == replacement.unwrap_or(OLD_REFRESH),
+			"secret values differ"
+		);
+		assert!(
+			original.refresh_token().expose_secret() == OLD_REFRESH,
+			"secret values differ"
+		);
 		assert!(!format!("{updated:?}").contains("canary"));
 		transport.assert_finished();
 	}
@@ -294,12 +300,13 @@ fn refresh_returns_new_refresh_token_when_present() {
 	let mut response = RefreshResponse::new();
 	response.set_access_token(ACCESS.to_owned());
 	let transport = FakeTransport::new::<RefreshRequest, _>(EResult::OK, response.clone());
-	assert_eq!(
+	assert!(
 		refresher(transport.clone())
 			.refresh(account().steam_id, &tokens())
 			.unwrap()
-			.expose_secret(),
-		ACCESS
+			.expose_secret()
+			== ACCESS,
+		"secret values differ"
 	);
 	transport.assert_finished();
 	let transport = FakeTransport::new::<RefreshRequest, _>(EResult::Expired, response);

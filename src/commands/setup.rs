@@ -74,7 +74,10 @@ where
 							loop {
 								if let Err(err) = Self::transfer_new_account(&mut linker, manager) {
 									if !already_added_phone_number {
-										error!("Failed to transfer authenticator. {}", err);
+										error!(
+											"Failed to transfer authenticator. {}",
+											crate::errors::safe_error(err.as_ref())
+										);
 										info!("There's nothing else to be done right now. Wait a few minutes and try again.");
 										match tui::prompt_char("Would you like to try again?", "yN")
 										{
@@ -133,7 +136,10 @@ where
 										}
 									}
 									Err(err) => {
-										error!("Failed to remove authenticator: {}", err);
+										error!(
+											"Failed to remove authenticator: {}",
+											crate::errors::safe_error(&err)
+										);
 									}
 								}
 							}
@@ -174,7 +180,7 @@ impl SetupCommand {
 		match manager.save() {
 			Ok(_) => {}
 			Err(err) => {
-				error!("Aborting the account linking process because we failed to save the manifest. This is really bad. Here is the error: {}", err);
+				error!("Aborting the account linking process because we failed to save the manifest. This is really bad. Here is the error: {}", crate::errors::safe_error(err.as_ref()));
 				eprintln!(
 					"Just in case, here is the account info. Save it somewhere just in case!\n{:#?}",
 					manager.get_account(&account_name).unwrap().lock().unwrap()
@@ -222,7 +228,7 @@ impl SetupCommand {
 					}
 				}
 				Err(err) => {
-					error!("Failed to finalize: {}", err);
+					error!("Failed to finalize: {}", crate::errors::safe_error(&err));
 					return Err(err.into());
 				}
 			}
@@ -270,7 +276,10 @@ impl SetupCommand {
 	{
 		info!("Transferring authenticator to steamguard-cli");
 		if let Err(err) = linker.transfer_start() {
-			error!("Failed to start transfer: {}", err);
+			error!(
+				"Failed to start transfer: {}",
+				crate::errors::safe_error(&err)
+			);
 			error!("You can't transfer an authenticator without a phone number on the account. Make sure you have a phone number on your account and try again.");
 			return Err(err.into());
 		}
@@ -284,7 +293,10 @@ impl SetupCommand {
 					break;
 				}
 				Err(err) => {
-					error!("Failed to transfer authenticator: {}", err);
+					error!(
+						"Failed to transfer authenticator: {}",
+						crate::errors::safe_error(&err)
+					);
 				}
 			}
 		}
@@ -323,7 +335,10 @@ pub fn do_add_phone_number<T: Transport>(transport: T, tokens: &Tokens) -> anyho
 				break;
 			}
 			Err(err) => {
-				error!("Failed to parse phone number: {}", err);
+				error!(
+					"Failed to parse phone number: {}",
+					crate::errors::safe_error(&err)
+				);
 			}
 		}
 	}
@@ -346,7 +361,10 @@ pub fn do_add_phone_number<T: Transport>(transport: T, tokens: &Tokens) -> anyho
 		match linker.verify_account_phone_with_code(code) {
 			Ok(_) => break,
 			Err(err) => {
-				error!("Failed to verify phone number: {}", err);
+				error!(
+					"Failed to verify phone number: {}",
+					crate::errors::safe_error(&err)
+				);
 			}
 		}
 	}
