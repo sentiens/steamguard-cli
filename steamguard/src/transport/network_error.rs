@@ -260,7 +260,7 @@ mod tests {
 	use crate::transport::TransportError;
 
 	#[test]
-	fn classifies_connection_failures() {
+	fn connection_refused_is_connection() {
 		let (_reservation, address) = super::super::tests::refused_endpoint();
 
 		let error = test_client()
@@ -335,7 +335,7 @@ mod tests {
 	}
 
 	#[test]
-	fn error_display_never_formats_arbitrary_sources() {
+	fn error_display_never_contains_url_or_credentials() {
 		struct Untrusted;
 		impl fmt::Debug for Untrusted {
 			fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -407,8 +407,97 @@ mod tests {
 		);
 	}
 
+	/// T-10/C06: normal source links and io::Error payloads must remain downcastable,
+	/// even when arbitrary intermediate formatters are forbidden to run.
 	#[test]
-	fn error_display_never_contains_response_body_or_retry_after_data() {
+	fn typed_source_chain_preserves_downcasts_without_formatting() {
+		struct Opaque {
+			inner: std::io::Error,
+		}
+		impl fmt::Display for Opaque {
+			fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+				panic!("arbitrary source Display invoked")
+			}
+		}
+		impl fmt::Debug for Opaque {
+			fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+				panic!("arbitrary source Debug invoked")
+			}
+		}
+		impl Error for Opaque {
+			fn source(&self) -> Option<&(dyn Error + 'static)> {
+				Some(&self.inner)
+			}
+		}
+		let error = NetworkError::response_body(
+			StatusCode::BAD_GATEWAY,
+			Some(std::io::Error::other(Opaque {
+				inner: std::io::Error::other(rustls::Error::General(
+					"https://proxy-user:proxy-password@source-canary.invalid secret-body-canary"
+						.into(),
+				)),
+			})),
+		);
+		let outer = TransportError::NetworkFailure(error);
+		let network = outer
+			.source()
+			.unwrap()
+			.downcast_ref::<NetworkError>()
+			.unwrap();
+		let io = network
+			.source()
+			.unwrap()
+			.downcast_ref::<std::io::Error>()
+			.unwrap();
+		let opaque = io.get_ref().unwrap().downcast_ref::<Opaque>().unwrap();
+		let io = opaque
+			.source()
+			.unwrap()
+			.downcast_ref::<std::io::Error>()
+			.unwrap();
+		assert!(
+			matches!(
+				io.get_ref().unwrap().downcast_ref::<rustls::Error>(),
+				Some(rustls::Error::General(_))
+			),
+			"typed TLS cause was lost"
+		);
+		assert!(
+			error_chain_contains::<rustls::Error>(&outer),
+			"typed traversal lost the TLS cause"
+		);
+		let diagnostic = format!("{network} {network:?} {network:#?} {outer} {outer:?} {outer:#?}");
+		for canary in [
+			"://",
+			"proxy-user",
+			"proxy-password",
+			"source-canary",
+			"secret-body-canary",
+		] {
+			assert!(
+				!diagnostic.contains(canary),
+				"arbitrary cause escaped into public diagnostics"
+			);
+		}
+
+		let error = NetworkError::response_body(
+			StatusCode::OK,
+			Some(std::io::Error::from_raw_os_error(61)),
+		);
+		assert!(
+			error
+				.source()
+				.unwrap()
+				.downcast_ref::<std::io::Error>()
+				.unwrap()
+				.raw_os_error()
+				== Some(61),
+			"numeric OS cause was lost"
+		);
+	}
+
+	#[test]
+	fn error_display_never_contains_response_body() {
 		for retry in [
 			b"120".as_slice(),
 			b"Wed, 21 Oct 2037 07:28:00 GMT",
@@ -461,9 +550,8 @@ mod tests {
 		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 		let address = listener.local_addr().unwrap();
 		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut request = [0; 1024];
-			let _ = stream.read(&mut request).unwrap();
+			let mut stream = super::super::tests::accept(&listener);
+			super::super::tests::read_headers(&mut stream);
 			stream
 				.write_all(
 					b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\n\r\n",
@@ -501,9 +589,11 @@ mod tests {
 			!output.contains("query-secret-canary"),
 			"sensitive assertion failed"
 		);
-		let source_output = error.source().unwrap().to_string();
 		assert!(
-			!source_output.contains("query-secret-canary"),
+			error
+				.source()
+				.and_then(|source| source.downcast_ref::<reqwest::Error>())
+				.is_some_and(|source| source.url().is_none()),
 			"sensitive assertion failed"
 		);
 		server.join().unwrap();

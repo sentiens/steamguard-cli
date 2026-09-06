@@ -12,6 +12,7 @@ use super::*;
 
 #[cfg(feature = "test-endpoints")]
 mod callers;
+mod socks;
 
 pub(super) fn accept(listener: &TcpListener) -> TcpStream {
 	listener.set_nonblocking(true).unwrap();
@@ -640,7 +641,7 @@ fn has_untrusted_certificate(error: &(dyn Error + 'static)) -> bool {
 }
 
 #[test]
-fn tls_rejection_is_classified_as_tls_for_origin_and_https_proxy() {
+fn tls_rejection_is_classified_as_tls() {
 	for tunnel in [true, false] {
 		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 		let scheme = if tunnel { "http" } else { "https" };
@@ -684,7 +685,7 @@ fn tls_rejection_is_classified_as_tls_for_origin_and_https_proxy() {
 
 #[test]
 #[ignore = "uses the real 10 second connect and 30 second total timeouts"]
-fn silent_proxy_obeys_connect_and_total_timeouts() {
+fn timeouts_are_10s_connect_30s_total_behavioral() {
 	for (url, seconds) in [
 		("https://origin.invalid/", 10),
 		("http://origin.invalid/", 30),

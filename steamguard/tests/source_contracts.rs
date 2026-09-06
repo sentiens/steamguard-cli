@@ -145,6 +145,78 @@ fn timeouts_are_10s_connect_30s_total() {
 	}
 }
 
+fn compact_function(source: &str, declaration: &str) -> String {
+	let source = source.split_once(declaration).unwrap().1;
+	let start = source.find('{').unwrap();
+	let mut depth = 0;
+	let end = source[start..]
+		.char_indices()
+		.find_map(|(index, character)| {
+			match character {
+				'{' => depth += 1,
+				'}' => depth -= 1,
+				_ => {}
+			}
+			(depth == 0).then_some(start + index + 1)
+		})
+		.unwrap();
+	source[start..end]
+		.lines()
+		.map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+		.flat_map(str::chars)
+		.filter(|character| !character.is_whitespace())
+		.collect()
+}
+
+/// T-09/C05: an allowlist of the complete reviewed construction path, paired with
+/// `tls_rejection_is_classified_as_tls` for negative TLS tests on proxy and origin.
+/// A new root, verifier, builder branch, or policy override requires explicit review.
+#[test]
+fn proxied_client_uses_only_pinned_webpki_roots() {
+	let source = include_str!("../src/transport/webapi.rs");
+	assert!(
+		compact_function(source, "fn proxy_client_builder(")
+			== concat!(
+				"{letproxy=proxy.to_reqwest_proxy()?;",
+				"Ok(reqwest::blocking::Client::builder()",
+				".no_proxy().proxy(proxy).use_rustls_tls()",
+				".tls_built_in_root_certs(false).tls_built_in_webpki_certs(true)",
+				".redirect(reqwest::redirect::Policy::none()).retry(reqwest::retry::never())",
+				".connect_timeout(Duration::from_secs(10)).timeout(Duration::from_secs(30))",
+				".cookie_store(false).no_gzip().no_brotli().no_zstd().no_deflate())}"
+			),
+		"approved proxy builder policy changed"
+	);
+	assert_eq!(
+		compact_function(source, "pub fn new_with_proxy("),
+		"{Self::from_proxy_client(Self::proxy_client_builder(proxy)?.build())}"
+	);
+	assert_eq!(
+		compact_function(source, "pub fn new_with_proxy_and_test_resolver<"),
+		concat!(
+			"{Self::from_proxy_client(",
+			"Self::proxy_client_builder(proxy)?.dns_resolver(resolver).build(),)}"
+		)
+	);
+	assert!(
+		compact_function(source, "fn from_proxy_client(")
+			== concat!(
+				"{Ok(Self{client:client.map_err(|_|ProxyTransportError::ClientBuild)?,",
+				"bounded_responses:true,})}"
+			),
+		"approved client finalization changed"
+	);
+	let before_hook = source
+		.split_once("pub fn new_with_proxy_and_test_resolver<")
+		.unwrap()
+		.0;
+	assert!(before_hook
+		.trim_end()
+		.ends_with(r#"#[cfg(feature = "test-endpoints")]"#));
+	let construction = source.split_once("fn build_web_request(").unwrap().0;
+	assert_eq!(construction.matches("Client::builder()").count(), 1);
+}
+
 #[test]
 fn upstream_convenience_methods_remain_available() {
 	use steamguard::token::{SteamJwtData, TwoFactorSecret};

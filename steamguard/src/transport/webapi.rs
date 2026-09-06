@@ -42,8 +42,30 @@ impl WebApiTransport {
 	/// [`WebApiTransport::new`] to retain the existing client construction behavior when no proxy is
 	/// required.
 	pub fn new_with_proxy(proxy: &ProxyConfig) -> Result<Self, ProxyTransportError> {
+		Self::from_proxy_client(Self::proxy_client_builder(proxy)?.build())
+	}
+
+	/// Constructs the approved proxy client with a resolver spy for offline tests.
+	///
+	/// Available only with `test-endpoints`; the resolver is the only policy override.
+	#[cfg(feature = "test-endpoints")]
+	pub fn new_with_proxy_and_test_resolver<R: reqwest::dns::Resolve + 'static>(
+		proxy: &ProxyConfig,
+		resolver: std::sync::Arc<R>,
+	) -> Result<Self, ProxyTransportError> {
+		Self::from_proxy_client(
+			Self::proxy_client_builder(proxy)?
+				.dns_resolver(resolver)
+				.build(),
+		)
+	}
+
+	// The single reviewed construction policy for both proxy entry points.
+	fn proxy_client_builder(
+		proxy: &ProxyConfig,
+	) -> Result<reqwest::blocking::ClientBuilder, ProxyTransportError> {
 		let proxy = proxy.to_reqwest_proxy()?;
-		let client = reqwest::blocking::Client::builder()
+		Ok(reqwest::blocking::Client::builder()
 			.no_proxy()
 			.proxy(proxy)
 			.use_rustls_tls()
@@ -58,11 +80,14 @@ impl WebApiTransport {
 			.no_gzip()
 			.no_brotli()
 			.no_zstd()
-			.no_deflate()
-			.build()
-			.map_err(|_| ProxyTransportError::ClientBuild)?;
+			.no_deflate())
+	}
+
+	fn from_proxy_client(
+		client: Result<reqwest::blocking::Client, reqwest::Error>,
+	) -> Result<Self, ProxyTransportError> {
 		Ok(Self {
-			client,
+			client: client.map_err(|_| ProxyTransportError::ClientBuild)?,
 			bounded_responses: true,
 		})
 	}
