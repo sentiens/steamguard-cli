@@ -162,6 +162,24 @@ impl WebApiTransport {
 	}
 }
 
+// Test endpoint overrides must never fall back to a live Steam host. Require a
+// literal loopback address so validation itself cannot perform DNS resolution.
+#[cfg(feature = "test-endpoints")]
+pub(super) fn require_loopback_base(url: &Url) -> Result<(), NetworkError> {
+	let loopback = url
+		.host_str()
+		.and_then(|host| {
+			host.trim_matches(['[', ']'])
+				.parse::<std::net::IpAddr>()
+				.ok()
+		})
+		.is_some_and(|ip| ip.is_loopback());
+	if !loopback || !matches!(url.scheme(), "http" | "https") {
+		return Err(NetworkError::invalid_request());
+	}
+	Ok(())
+}
+
 fn build_web_request(
 	client: &reqwest::blocking::Client,
 	request: WebRequest<'_>,
@@ -218,6 +236,13 @@ fn send_web_with_limits(
 	request: WebRequest<'_>,
 	bounded: bool,
 ) -> Result<WebResponse, NetworkError> {
+	#[cfg(feature = "test-endpoints")]
+	if !matches!(request.endpoint, WebEndpoint::Test(_)) {
+		require_loopback_base(
+			&Url::parse(endpoints::community_base_url())
+				.map_err(|_| NetworkError::invalid_request())?,
+		)?;
+	}
 	let endpoint = request.endpoint.name();
 	let response = send(build_web_request(client, request)?, bounded)?;
 	let status = response.status().as_u16();
@@ -327,6 +352,8 @@ impl Transport for WebApiTransport {
 		}
 
 		let url = apireq.build_url();
+		#[cfg(feature = "test-endpoints")]
+		require_loopback_base(&Url::parse(&url).map_err(|_| NetworkError::invalid_request())?)?;
 		debug!("HTTP Request method: {}", Req::method());
 		trace!("HTTP request metadata: {apireq:#?}");
 		let mut req = self.client.request(Req::method(), &url);

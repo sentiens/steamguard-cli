@@ -15,7 +15,7 @@ use crate::protobufs::steammessages_auth_steamclient::{
 };
 use crate::steamapi::authentication::AuthenticationClient;
 use crate::steamapi::EResult;
-use crate::token::Tokens;
+use crate::token::{Jwt, Tokens};
 use crate::transport::{NetworkError, Transport, TransportError};
 use anyhow::Context;
 use base64::Engine;
@@ -148,6 +148,33 @@ impl fmt::Debug for PollOutcome {
 	}
 }
 
+/// Tokens returned by a single poll, without generating an access token.
+///
+/// SGM T-43 uses this at pin-05 to check the refresh JWT's subject against the
+/// known account and begin-auth subject before sending it in another request.
+#[derive(Clone)]
+pub enum PollTokensOutcome {
+	/// The session has not issued tokens yet.
+	Waiting,
+	/// Steam issued both tokens; callers must validate their subjects.
+	Tokens(Tokens),
+	/// Steam issued only a refresh token. No access-token request has been made.
+	RefreshTokenOnly(Jwt),
+}
+
+impl fmt::Debug for PollTokensOutcome {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Waiting => f.write_str("Waiting"),
+			Self::Tokens(_) => f.debug_tuple("Tokens").field(&"[REDACTED]").finish(),
+			Self::RefreshTokenOnly(_) => f
+				.debug_tuple("RefreshTokenOnly")
+				.field(&"[REDACTED]")
+				.finish(),
+		}
+	}
+}
+
 #[derive(Clone)]
 pub struct BeginQrLoginResponse {
 	challenge_url: String,
@@ -233,6 +260,9 @@ where
 		trace!("UserLogin::begin_auth_via_credentials");
 
 		let rsa = self.client.fetch_rsa_key(account_name.to_owned())?;
+		if rsa.result != EResult::OK {
+			return Err(rsa.result.into());
+		}
 
 		let mut req = CAuthentication_BeginAuthSessionViaCredentials_Request_BinaryGuardData::new();
 		req.set_account_name(account_name.to_owned());
@@ -313,6 +343,23 @@ where
 	/// access-token request; both requests use the configured transport synchronously.
 	/// Callers schedule subsequent steps using [`Self::poll_interval`].
 	pub fn poll_once(&mut self) -> Result<PollOutcome, LoginError> {
+		match self.poll_once_tokens_only()? {
+			PollTokensOutcome::Waiting => Ok(PollOutcome::Waiting),
+			PollTokensOutcome::Tokens(tokens) => Ok(PollOutcome::Tokens(tokens)),
+			PollTokensOutcome::RefreshTokenOnly(refresh) => self
+				.generate_access_token(&refresh)
+				.map(PollOutcome::Tokens),
+		}
+	}
+
+	/// Polls once without sleeping, retrying, or generating an access token.
+	///
+	/// Makes exactly one polling request when a session has started. A refresh-only
+	/// token is returned without decoding or using it. SGM T-43 at pin-05 must check
+	/// its JWT `sub` against the known account and begin-auth subject before calling
+	/// [`Self::generate_access_token`]. Decoding a JWT does not verify its signature.
+	/// Callers schedule subsequent polls using [`Self::poll_interval`].
+	pub fn poll_once_tokens_only(&mut self) -> Result<PollTokensOutcome, LoginError> {
 		let Some(started_auth) = self.started_auth.as_mut() else {
 			return Err(LoginError::SessionNotStarted);
 		};
@@ -334,37 +381,49 @@ where
 			return Err(LoginError::UnknownOutcome);
 		}
 		if !data.has_access_token() && !data.has_refresh_token() {
-			return Ok(PollOutcome::Waiting);
+			return Ok(PollTokensOutcome::Waiting);
 		}
 		if data.refresh_token().is_empty() {
 			return Err(LoginError::UnknownOutcome);
 		}
 
-		let mut tokens = Tokens::new(data.take_access_token(), data.take_refresh_token());
-		if tokens.access_token().expose_secret().is_empty() {
-			// Steam has issued refresh-only login responses since 2023-09-12.
-			let steam_id = tokens
-				.refresh_token()
-				.decode()
-				.context("decoding refresh token for steam id")?
-				.try_steam_id()
-				.context("reading Steam ID from refresh token")?;
-			let mut req = CAuthentication_AccessToken_GenerateForApp_Request::new();
-			req.set_steamid(steam_id);
-			req.set_refresh_token(tokens.refresh_token().expose_secret().to_owned());
-			let resp = self
-				.client
-				.generate_access_token(req, tokens.access_token())?;
-			if resp.result != EResult::OK {
-				return Err(resp.result.into());
-			}
-			tokens = crate::refresher::tokens_from_response(
-				resp.into_response_data(),
-				tokens.refresh_token(),
-			)
-			.map_err(|_| LoginError::UnknownOutcome)?;
+		if data.access_token().is_empty() {
+			return Ok(PollTokensOutcome::RefreshTokenOnly(
+				data.take_refresh_token().into(),
+			));
 		}
-		Ok(PollOutcome::Tokens(tokens))
+		Ok(PollTokensOutcome::Tokens(Tokens::new(
+			data.take_access_token(),
+			data.take_refresh_token(),
+		)))
+	}
+
+	/// Generates access tokens from a caller-approved refresh JWT in one request.
+	///
+	/// SGM T-43 at pin-05 calls this only after checking the refresh subject returned
+	/// by [`Self::poll_once_tokens_only`]. This method decodes the subject for the
+	/// request but does not compare it with an account or verify the JWT signature.
+	/// Malformed subjects fail locally. No started login session is required.
+	/// The returned pair preserves the supplied refresh token unless Steam rotates
+	/// it; callers must validate both returned subjects before accepting the pair.
+	pub fn generate_access_token(&mut self, refresh: &Jwt) -> Result<Tokens, LoginError> {
+		let steam_id = refresh
+			.decode()
+			.context("decoding refresh token for steam id")?
+			.try_steam_id()
+			.context("reading Steam ID from refresh token")?;
+		let mut req = CAuthentication_AccessToken_GenerateForApp_Request::new();
+		req.set_steamid(steam_id);
+		req.set_refresh_token(refresh.expose_secret().to_owned());
+		// Preserve the refresh-only poll path's empty access-token parameter.
+		let resp = self
+			.client
+			.generate_access_token(req, &Jwt::from(String::new()))?;
+		if resp.result != EResult::OK {
+			return Err(resp.result.into());
+		}
+		crate::refresher::tokens_from_response(resp.into_response_data(), refresh)
+			.map_err(|_| LoginError::UnknownOutcome)
 	}
 
 	/// Polls until tokens are ready, waiting between steps at Steam's requested interval.

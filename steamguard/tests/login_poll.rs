@@ -21,10 +21,10 @@ use steamguard::{
 		},
 	},
 	steamapi::{ApiRequest, ApiResponse, BuildableRequest, EResult},
-	token::Tokens,
+	token::{Jwt, Tokens},
 	transport::{Transport, TransportError},
 	userlogin::{BeginQrLoginResponse, UpdateAuthSessionError},
-	AllowedConfirmation, DeviceDetails, LoginError, PollOutcome, UserLogin,
+	AllowedConfirmation, DeviceDetails, LoginError, PollOutcome, PollTokensOutcome, UserLogin,
 };
 
 const LOGIN_SOURCE: &str = include_str!("../src/userlogin.rs");
@@ -379,7 +379,12 @@ fn block<'a>(source: &'a str, declaration: &str) -> &'a str {
 #[test]
 fn poll_once_returns_waiting_without_sleeping() {
 	let code = production_code();
-	let body = block(&code, "pub fn poll_once(");
+	let wrapper = block(&code, "pub fn poll_once(");
+	assert!(
+		wrapper.matches("self.poll_once_tokens_only()").count() == 1,
+		"single polling step required"
+	);
+	let body = block(&code, "pub fn poll_once_tokens_only(");
 	assert!(
 		!Regex::new(r"\b(sleep|sleep_until|park|park_timeout|wait|wait_timeout|loop|while|for)\b")
 			.unwrap()
@@ -1025,5 +1030,188 @@ fn login_and_update_local_and_transport_errors_have_no_eresult() {
 			error.eresult().is_none(),
 			"non-Steam error has a Steam result"
 		);
+	}
+}
+
+#[test]
+fn tokens_only_poll_allows_subject_rejection_before_generation() {
+	for access in [None, Some("")] {
+		for subject in ["76561198000000002", "invalid-subject-canary"] {
+			let refresh = refresh_token(subject);
+			let (mut login, transport) =
+				started_login(None, vec![poll_step(poll_response(access, Some(&refresh)))]);
+			let outcome = login.poll_once_tokens_only().unwrap();
+			assert!(
+				!format!("{outcome:?}").contains(&refresh),
+				"test invariant failed"
+			);
+			assert!(
+				format!("{outcome:?}").contains("[REDACTED]"),
+				"test invariant failed"
+			);
+			let PollTokensOutcome::RefreshTokenOnly(token) = outcome else {
+				panic!("expected refresh-only token")
+			};
+			assert!(token.expose_secret() == refresh, "test invariant failed");
+			assert!(
+				token.decode().and_then(|claims| claims.try_steam_id()).ok()
+					!= Some(76561198000000001),
+				"test invariant failed"
+			);
+			// The consumer rejects the subject: no GenerateAccessTokenForApp is scripted.
+			transport.assert_finished();
+		}
+	}
+}
+
+#[test]
+fn tokens_only_poll_then_explicit_generation_preserves_or_rotates_refresh() {
+	for rotated in [None, Some(""), Some("rotated-refresh-canary")] {
+		let mut generated = RefreshResponse::new();
+		generated.set_access_token(ACCESS.to_owned());
+		generated.refresh_token = rotated.map(str::to_owned);
+		let (mut login, transport) = started_login(None, vec![poll_step(refresh_only_response())]);
+		let PollTokensOutcome::RefreshTokenOnly(refresh) = login.poll_once_tokens_only().unwrap()
+		else {
+			panic!("expected refresh-only token")
+		};
+		transport.assert_finished();
+		assert!(
+			(refresh.decode().unwrap().try_steam_id().unwrap()) == (76561198000000001),
+			"test invariant failed"
+		);
+		transport
+			.0
+			.borrow_mut()
+			.push_back(Step::response::<RefreshRequest, _>(EResult::OK, generated));
+		let outcome = login.generate_access_token(&refresh);
+		if rotated == Some("") {
+			assert!(
+				matches!(outcome, Err(LoginError::UnknownOutcome)),
+				"test invariant failed"
+			);
+		} else {
+			assert_tokens(
+				PollOutcome::Tokens(outcome.unwrap()),
+				rotated.unwrap_or(refresh.expose_secret()),
+			);
+		}
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn tokens_only_poll_returns_waiting_or_complete_tokens() {
+	let (mut login, transport) = new_login(vec![]);
+	assert!(
+		matches!(
+			login.poll_once_tokens_only(),
+			Err(LoginError::SessionNotStarted)
+		),
+		"test invariant failed"
+	);
+	transport.assert_finished();
+	let (mut login, transport) = started_login(
+		None,
+		vec![poll_step(PollResponse::new()), poll_step(ready_response())],
+	);
+	assert!(
+		matches!(
+			login.poll_once_tokens_only().unwrap(),
+			PollTokensOutcome::Waiting
+		),
+		"test invariant failed"
+	);
+	let outcome = login.poll_once_tokens_only().unwrap();
+	assert!(
+		!format!("{outcome:?}").contains(ACCESS),
+		"test invariant failed"
+	);
+	assert!(
+		!format!("{outcome:?}").contains(REFRESH),
+		"test invariant failed"
+	);
+	let PollTokensOutcome::Tokens(tokens) = outcome else {
+		panic!("expected complete tokens")
+	};
+	assert_tokens(PollOutcome::Tokens(tokens), REFRESH);
+	transport.assert_finished();
+}
+
+#[test]
+fn explicit_generation_rejects_malformed_subject_without_request() {
+	for refresh in [
+		String::new(),
+		"malformed-refresh-canary".to_owned(),
+		refresh_token("invalid-subject-canary"),
+	] {
+		let (mut login, transport) = new_login(vec![]);
+		let error = login
+			.generate_access_token(&Jwt::from(refresh.clone()))
+			.unwrap_err();
+		assert!(
+			matches!(error, LoginError::OtherFailure(_)),
+			"test invariant failed"
+		);
+		assert_redacted(&error, &refresh);
+		transport.assert_finished();
+	}
+}
+
+#[test]
+fn rsa_eresult_is_checked_before_key_fields_or_begin_request() {
+	for result in [
+		EResult::OK,
+		EResult::Busy,
+		EResult::RateLimitExceeded,
+		EResult::Unknown(987654),
+	] {
+		for with_key in [false, true] {
+			let mut rsa = RsaResponse::new();
+			if with_key {
+				rsa.set_publickey_exp("010001".to_owned());
+				rsa.set_publickey_mod("ff".repeat(128));
+				rsa.set_timestamp(1);
+			}
+			let mut steps = vec![Step::response::<RsaRequest, _>(result, rsa)];
+			if result == EResult::OK && with_key {
+				let mut begin = CredentialsResponse::new();
+				begin.set_client_id(123);
+				begin.set_request_id(b"request-id-canary".to_vec());
+				begin.set_steamid(76561198000000001);
+				steps.push(Step::response::<CredentialsRequest, _>(EResult::OK, begin));
+			}
+			let (mut login, transport) = new_login(steps);
+			let outcome = login.begin_auth_via_credentials("synthetic-account", "password-canary");
+			if result == EResult::OK && with_key {
+				outcome.unwrap();
+				assert!(
+					(login.started_steam_id()) == (Some(76561198000000001)),
+					"test invariant failed"
+				);
+			} else {
+				let error = outcome.unwrap_err();
+				if result == EResult::OK {
+					assert!(
+						matches!(error, LoginError::OtherFailure(_)),
+						"test invariant failed"
+					);
+					assert!(error.eresult().is_none(), "test invariant failed");
+				} else {
+					assert!(
+						(error.eresult().map(EResult::code)) == (Some(result.code())),
+						"test invariant failed"
+					);
+					assert!(
+						(std::mem::discriminant(&error))
+							== (std::mem::discriminant(&LoginError::from(result))),
+						"test invariant failed"
+					);
+				}
+				assert_redacted(&error, "");
+				assert!(login.started_steam_id().is_none(), "test invariant failed");
+			}
+			transport.assert_finished();
+		}
 	}
 }

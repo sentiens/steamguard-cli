@@ -727,7 +727,7 @@ fn transport_error_carries_network_failure() {
 		"transport_error_carries_network_failure",
 		&[(
 			concat!("STEAMGUARD_", "API_BASE_URL"),
-			"http://origin.invalid".into(),
+			"http://127.0.0.1:9".into(),
 		)],
 	) {
 		return;
@@ -966,7 +966,7 @@ fn api_diagnostics_never_format_upstream_text() {
 		"api_diagnostics_never_format_upstream_text",
 		&[(
 			concat!("STEAMGUARD_", "API_BASE_URL"),
-			"http://origin-canary.invalid".into(),
+			"http://127.0.0.1:9".into(),
 		)],
 	) {
 		return;
@@ -1019,4 +1019,34 @@ fn api_diagnostics_never_format_upstream_text() {
 	assert!(logs.contains("HTTP Request method:"));
 	assert!(!logs.contains("canary"), "sensitive assertion failed");
 	assert!(!logs.contains("://"));
+}
+
+#[cfg(feature = "test-endpoints")]
+#[test]
+fn test_endpoint_guard_accepts_only_literal_loopback_http_urls() {
+	for base in [
+		"http://127.0.0.1:1234",
+		"https://127.1.2.3",
+		"http://[::1]:1234",
+	] {
+		assert!(
+			super::webapi::require_loopback_base(&reqwest::Url::parse(base).unwrap()).is_ok(),
+			"test invariant failed"
+		);
+	}
+	for base in [
+		"https://login.steampowered.com",
+		"http://localhost",
+		"http://192.0.2.1",
+		"http://[2001:db8::1]",
+		"ftp://127.0.0.1",
+	] {
+		let error =
+			super::webapi::require_loopback_base(&reqwest::Url::parse(base).unwrap()).unwrap_err();
+		assert!(
+			(error.kind()) == (NetworkErrorKind::InvalidRequest),
+			"test invariant failed"
+		);
+		assert!((error.sent()) == (RequestSent::No), "test invariant failed");
+	}
 }

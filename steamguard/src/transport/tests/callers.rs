@@ -23,7 +23,7 @@ fn isolated(name: &str) -> bool {
 			concat!("STEAMGUARD_", "LOGIN_BASE_URL"),
 			concat!("STEAMGUARD_", "COMMUNITY_BASE_URL"),
 		]
-		.map(|key| (key, "http://origin-canary.invalid".to_owned())),
+		.map(|key| (key, "http://127.0.0.1:9".to_owned())),
 	)
 }
 

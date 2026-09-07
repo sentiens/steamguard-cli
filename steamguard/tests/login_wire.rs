@@ -80,6 +80,33 @@ fn loopback_begin_subject_and_exact_eresults_redact_wire_messages() {
 			wire_response(result, begin.clone()),
 		));
 	}
+	let rsa_results = [
+		EResult::OK,
+		EResult::Busy,
+		EResult::RateLimitExceeded,
+		EResult::Unknown(987654),
+	];
+	for result in rsa_results {
+		for with_key in [false, true] {
+			script.push((
+				"GetPasswordRSAPublicKey",
+				wire_response(
+					result,
+					if with_key {
+						rsa.clone()
+					} else {
+						RsaResponse::new()
+					},
+				),
+			));
+			if result == EResult::OK && with_key {
+				script.push((
+					"BeginAuthSessionViaCredentials",
+					wire_response(EResult::OK, begin.clone()),
+				));
+			}
+		}
+	}
 	let server = thread::spawn(move || {
 		for (method, response) in script {
 			let deadline = Instant::now() + Duration::from_secs(5);
@@ -169,6 +196,31 @@ fn loopback_begin_subject_and_exact_eresults_redact_wire_messages() {
 			"server message leaked"
 		);
 		assert_eq!(login.started_steam_id(), None);
+	}
+	for result in rsa_results {
+		for with_key in [false, true] {
+			let mut login = new_login();
+			let outcome = login.begin_auth_via_credentials("synthetic-account", "password-canary");
+			if result == EResult::OK && with_key {
+				outcome.unwrap();
+				assert!(
+					(login.started_steam_id()) == (Some(76561198000000001)),
+					"test invariant failed"
+				);
+			} else {
+				let error = outcome.unwrap_err();
+				assert!(
+					(error.eresult().map(EResult::code))
+						== ((result != EResult::OK).then_some(result.code())),
+					"test invariant failed"
+				);
+				assert!(login.started_steam_id().is_none(), "test invariant failed");
+				assert!(
+					!format!("{error} {error:?}").contains("canary"),
+					"test invariant failed"
+				);
+			}
+		}
 	}
 	server.join().unwrap();
 }

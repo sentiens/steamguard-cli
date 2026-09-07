@@ -110,6 +110,34 @@ By contributing code to this project, you give me and any future maintainers a n
 
 * [Unreal Engine to Steam publishing CI/CD pipeline](https://github.com/kasp1/dozer-pipelines), a sample pipeline built for [Dozer](https://github.com/kasp1/Dozer), a simple CI/CD runner
 
+## SGM fork — E4-FORK-05 (pin-05)
+
+SGM T-43 can validate a refresh-only login token before sending it back to Steam:
+`UserLogin<T>::poll_once_tokens_only(&mut self) -> Result<PollTokensOutcome, LoginError>`
+returns `Waiting`, `Tokens(Tokens)`, or `RefreshTokenOnly(Jwt)` after one poll.
+`PollTokensOutcome` is available at the crate root and under `userlogin`; Debug
+redacts both token variants. The existing `PollOutcome`, `poll_once`, and
+`poll_until_tokens` retain their behavior, including automatic generation.
+
+After checking the refresh JWT's `sub` against the known account and the
+begin-auth subject, call
+`UserLogin<T>::generate_access_token(&mut self, refresh: &Jwt) -> Result<Tokens, LoginError>`.
+This makes one generation request, retaining the refresh token unless Steam
+rotates it. Invalid JWT subjects fail locally; decoding does not verify the JWT
+signature. Validate both returned subjects, including any rotated refresh token,
+before accepting the session. Neither new method sleeps or retries.
+
+Credentials login now checks the RSA response's `EResult` before using key fields.
+Every non-OK result stops before begin-auth, even when key fields are present;
+`LoginError::eresult().map(EResult::code)` retains the exact rejection code.
+
+With `test-endpoints`, the transport refuses API, login, and community base URLs
+unless their host is a literal loopback IP and their scheme is HTTP(S). Missing
+overrides therefore fail locally instead of contacting Steam. Explicit
+`WebEndpoint::Test` URLs used by the synthetic `.invalid` proxy/DNS tests remain
+separate from these service base URLs; their stands use loopback proxies or a
+resolver that refuses DNS.
+
 ## SGM fork — E4-FORK-04
 
 SGM T-43 consumes two typed login APIs at pin-04. `LoginError::eresult()` and
