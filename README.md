@@ -110,6 +110,92 @@ By contributing code to this project, you give me and any future maintainers a n
 
 * [Unreal Engine to Steam publishing CI/CD pipeline](https://github.com/kasp1/dozer-pipelines), a sample pipeline built for [Dozer](https://github.com/kasp1/Dozer), a simple CI/CD runner
 
+## SGM fork — E4-FORK-06 (pin-06)
+
+`AccountLinker::transfer_finish_checked` sends one challenge-continue request,
+checks the outer EResult, requires explicit `success = true`, and rejects a
+supplied replacement `steamid` that differs from the access token's decoded
+subject. Missing `success` is `MissingAcceptance`; explicit false is
+`NotAccepted { status }`, even without replacement secrets. A foreign subject is
+`SubjectMismatch`. These checks precede secret extraction. Missing replacement
+data still yields `MissingReplacementToken`. Local JWT decoding does not verify
+a signature or establish authenticated identity.
+
+The accepted result preserves optional replacement `status` and `steamid`
+without protobuf defaults. `status` is the schema's raw `int32`, with no declared
+enum or acceptance mapping; callers can inspect it without guessing an EResult.
+An absent replacement subject remains `None`, while `account.steam_id` retains
+the token subject as before. Consumers must still check all authenticator fields
+they require. Debug redacts the account and replacement subject. The existing
+`transfer_finish` signature and behavior remain intact, including accepting
+legacy replies with false/missing success or a foreign replacement subject.
+
+Exact additive public API (`TransferFinish` and `TransferError` are also
+re-exported from the crate root):
+
+```text
+impl<T: Transport> AccountLinker<T> {
+    pub fn transfer_finish_checked(
+        &mut self, sms_code: impl AsRef<str>,
+    ) -> Result<TransferFinish, TransferError>;
+}
+pub struct TransferFinish {
+    pub account: SteamGuardAccount,
+    pub accepted: bool,
+    pub replacement_status: Option<i32>,
+    pub steam_id: Option<u64>,
+}
+// New TransferError variants:
+NotAccepted { status: Option<i32> }
+MissingAcceptance
+SubjectMismatch
+
+impl<T> ApiResponse<T> {
+    pub fn http_status(&self) -> Option<u16>;
+}
+impl ApiResponse<CPhone_IsAccountWaitingForEmailConfirmation_Response> {
+    pub fn seconds_to_wait(&self) -> Option<u32>;
+}
+```
+
+Protocol inventory, checked against both `.proto` sources and generated Rust
+(`src/protobufs.rs` includes generated `OUT_DIR/protobufs` files):
+
+| Method / response | Remaining attempts | Wait / throttle fields |
+|---|---|---|
+| `RemoveAuthenticatorViaChallengeStart` / transfer start | None | None |
+| `RemoveAuthenticatorViaChallengeContinue` / transfer finish, including replacement token | None | None; replacement `server_time` is a timestamp, not a delay |
+| `CPhone_SetAccountPhoneNumber` | None | None |
+| `CPhone_IsAccountWaitingForEmailConfirmation` | None | Optional `uint32 seconds_to_wait` (field 2) |
+| `CPhone_SendPhoneVerificationCode` | None | None (empty response) |
+| `CPhone_VerifyAccountPhoneWithCode` | None | None (empty response) |
+
+None of these responses contains `attempts_remaining`, `retry_after`, or another
+attempt/throttle field. The separate remove-authenticator/status responses have
+`revocation_attempts_remaining`; that is not a transfer or phone attempt count.
+No synthetic counts are added to transfer or phone errors. The phone clients
+return decoded `ApiResponse`s for Steam rejections, so `seconds_to_wait()` is
+available before checking EResult, even when the awaiting bool is false/missing.
+It preserves absent versus explicit zero; it is not an attempt count, an HTTP
+Retry-After value, or proof of throttling. The schema does not define its meaning.
+The legacy PhoneLinker convenience method retains its existing lossy behavior;
+use PhoneClient and the response accessor when retaining rejection metadata.
+
+`ApiResponse::http_status()` retains the actual HTTP status captured by the
+transport for successfully decoded bodies, including a non-OK Steam EResult over
+HTTP success. Custom transports using the existing `ApiResponse::new` return
+`None`; no 200 is invented. HTTP failures still use the existing transport errors
+and their status/Retry-After diagnostics. Consumers must read metadata before
+`into_response_data()`. Capturing status adds one field assignment at the existing
+WebApiTransport response-construction site; E4-FORK-05b routing guards are unchanged.
+
+Socket-free tables in `transfer_phone_responses` cover accepted/refused/foreign
+replacements, missing metadata, exact outer rejections, legacy compatibility,
+all email wait presence/value combinations, and the generated schema inventory.
+`transfer_phone_wire::loopback_decoded_steam_rejections_retain_actual_http_status`
+checks actual HTTP 200/201 capture for OK and rejected Steam results. Run this
+unignored test in the parent environment if local loopback binding returns EPERM.
+
 ## SGM fork — E4-FORK-05 (pin-05)
 
 SGM T-43 can validate a refresh-only login token before sending it back to Steam:

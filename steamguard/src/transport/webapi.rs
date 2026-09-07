@@ -464,6 +464,7 @@ impl Transport for WebApiTransport {
 			decode_msg::<Res>(&resp.bytes().map_err(NetworkError::from)?)?
 		};
 		let api_resp = ApiResponse {
+			http_status: Some(status.as_u16()),
 			result: eresult,
 			error_message: error_msg,
 			response_data: res,
@@ -873,6 +874,7 @@ mod tests {
 		let request = ApiRequest::new("ITestService", "SubmitSecret", 1, request_data)
 			.with_access_token(&token);
 		let response = ApiResponse {
+			http_status: None,
 			result: EResult::Fail,
 			error_message: Some("response-error-canary".to_owned()),
 			response_data: "response-body-canary",

@@ -247,10 +247,35 @@ where
 	}
 
 	/// Completes the process of "transfering" a mobile authenticator from a different device to this device.
+	///
+	/// Preserves the legacy behavior: body acceptance, replacement status and subject
+	/// are not validated. Prefer [`Self::transfer_finish_checked`] for new callers.
+	/// Neither challenge response carries remaining attempts or a retry delay.
 	pub fn transfer_finish(
 		&mut self,
 		sms_code: impl AsRef<str>,
 	) -> Result<SteamGuardAccount, TransferError> {
+		Ok(self.transfer_finish_impl(sms_code.as_ref(), false)?.account)
+	}
+
+	/// Makes one finish request and requires explicit body acceptance. A supplied
+	/// replacement `steamid` must match the access token's decoded subject; decoding
+	/// the local JWT does not verify its signature or establish authenticated identity.
+	/// Missing acceptance is distinct from an explicit refusal. Optional replacement
+	/// `status` is retained verbatim: the schema supplies an int32, not an enum.
+	/// No attempt count or retry delay exists in this response or replacement token.
+	pub fn transfer_finish_checked(
+		&mut self,
+		sms_code: impl AsRef<str>,
+	) -> Result<TransferFinish, TransferError> {
+		self.transfer_finish_impl(sms_code.as_ref(), true)
+	}
+
+	fn transfer_finish_impl(
+		&mut self,
+		sms_code: &str,
+		checked: bool,
+	) -> Result<TransferFinish, TransferError> {
 		let access_token = self.tokens.access_token();
 		let steam_id = access_token
 			.decode()
@@ -258,7 +283,7 @@ where
 			.try_steam_id()
 			.context("reading Steam ID from access token")?;
 		let mut req = CTwoFactor_RemoveAuthenticatorViaChallengeContinue_Request::new();
-		req.set_sms_code(sms_code.as_ref().to_owned());
+		req.set_sms_code(sms_code.to_owned());
 		req.set_generate_new_token(true);
 		req.set_version(2); // Version has the same meaning as it does in AddAuthenticator Request, see `link()` above.
 		let resp = self
@@ -268,6 +293,29 @@ where
 			return Err(resp.result.into());
 		}
 		let mut resp = resp.into_response_data();
+		let accepted = resp.success == Some(true);
+		let replacement_status = resp
+			.replacement_token
+			.as_ref()
+			.and_then(|token| token.status);
+		let replacement_steam_id = resp
+			.replacement_token
+			.as_ref()
+			.and_then(|token| token.steamid);
+		if checked {
+			match resp.success {
+				Some(true) => {}
+				Some(false) => {
+					return Err(TransferError::NotAccepted {
+						status: replacement_status,
+					})
+				}
+				None => return Err(TransferError::MissingAcceptance),
+			}
+			if replacement_steam_id.is_some_and(|subject| subject != steam_id) {
+				return Err(TransferError::SubjectMismatch);
+			}
+		}
 		let mut resp = take_replacement_token(&mut resp)?;
 		let account = SteamGuardAccount {
 			account_name: resp.take_account_name(),
@@ -287,7 +335,33 @@ where
 				.into(),
 			tokens: Some(self.tokens.clone()),
 		};
-		Ok(account)
+		Ok(TransferFinish {
+			account,
+			accepted,
+			replacement_status,
+			steam_id: replacement_steam_id,
+		})
+	}
+}
+
+/// An explicitly accepted transfer. Optional metadata preserves protobuf presence.
+/// Missing replacement subject/status is not synthesized from the local token.
+/// Callers must still validate their required authenticator fields.
+pub struct TransferFinish {
+	pub account: SteamGuardAccount,
+	pub accepted: bool,
+	pub replacement_status: Option<i32>,
+	pub steam_id: Option<u64>,
+}
+
+impl std::fmt::Debug for TransferFinish {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("TransferFinish")
+			.field("account", &"[REDACTED]")
+			.field("accepted", &self.accepted)
+			.field("replacement_status", &self.replacement_status)
+			.field("steam_id", &self.steam_id.map(|_| "[REDACTED]"))
+			.finish()
 	}
 }
 
@@ -463,6 +537,14 @@ pub enum TransferError {
 	BadSmsCode,
 	#[error("Steam did not return replacement authenticator data.")]
 	MissingReplacementToken,
+	/// The body explicitly reports `success = false`; status is the raw optional
+	/// replacement-token status, not the outer EResult.
+	#[error("Steam did not accept the transfer (replacement status: {status:?}).")]
+	NotAccepted { status: Option<i32> },
+	#[error("Steam did not supply transfer acceptance.")]
+	MissingAcceptance,
+	#[error("The replacement authenticator belongs to a different Steam subject.")]
+	SubjectMismatch,
 	#[error("Failed to send request to Steam: {0:?}")]
 	Transport(#[from] crate::transport::TransportError),
 	#[error("Steam returned an unexpected error code: {0:?}")]

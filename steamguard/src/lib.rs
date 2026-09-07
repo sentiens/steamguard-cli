@@ -1,6 +1,7 @@
 use crate::token::TwoFactorSecret;
 use accountlinker::RemoveAuthenticatorError;
 pub use accountlinker::{AccountLinkError, AccountLinker, FinalizeLinkError};
+pub use accountlinker::{TransferError, TransferFinish};
 pub use api_responses::AllowedConfirmation;
 pub use approver::{ApproverError, LoginApprover};
 pub use confirmation::*;

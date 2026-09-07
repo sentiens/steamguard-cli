@@ -1,5 +1,20 @@
 # Changelog
 
+## SGM fork — E4-FORK-06 (pin-06)
+
+- Added `AccountLinker::transfer_finish_checked`, `TransferFinish`, and typed
+  `TransferError::{NotAccepted { status }, MissingAcceptance, SubjectMismatch}`.
+  Checked transfers require explicit success, reject foreign supplied subjects,
+  and retain raw optional replacement status/subject. Legacy finish is unchanged.
+- Added `ApiResponse::http_status() -> Option<u16>` for decoded responses,
+  including Steam rejections over successful HTTP. Custom response construction
+  leaves it absent. HTTP failure handling and the E4-FORK-05b guard are unchanged.
+- Added `ApiResponse<CPhone_IsAccountWaitingForEmailConfirmation_Response>::seconds_to_wait()
+  -> Option<u32>` with presence preserved on OK and rejected results. No transfer
+  or phone attempt counts exist in the current schemas; no counts are invented.
+  The README records the complete method/field inventory and API signatures.
+- Added socket-free transfer/phone tables and one loopback status-capture test.
+
 ## SGM fork — E4-FORK-05 (pin-05)
 
 SGM T-43 can validate a refresh-only login token before sending it back to Steam:

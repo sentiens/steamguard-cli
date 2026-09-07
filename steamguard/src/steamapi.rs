@@ -101,6 +101,7 @@ impl<'a, T: BuildableRequest> ApiRequest<'a, T> {
 
 #[derive(Clone)]
 pub struct ApiResponse<T> {
+	pub(crate) http_status: Option<u16>,
 	pub(crate) result: EResult,
 	pub(crate) error_message: Option<String>,
 	pub(crate) response_data: T,
@@ -123,10 +124,18 @@ impl<T> ApiResponse<T> {
 	/// Creates a response for a custom [`Transport`] implementation.
 	pub fn new(result: EResult, error_message: Option<String>, response_data: T) -> Self {
 		Self {
+			http_status: None,
 			result,
 			error_message,
 			response_data,
 		}
+	}
+
+	/// HTTP status of the decoded response, including a Steam rejection over HTTP
+	/// success. `None` for custom transports using [`Self::new`]; never assumes 200.
+	/// HTTP failures still return a transport error before protobuf decoding.
+	pub fn http_status(&self) -> Option<u16> {
+		self.http_status
 	}
 
 	pub fn result(&self) -> EResult {
@@ -143,6 +152,17 @@ impl<T> ApiResponse<T> {
 
 	pub fn into_response_data(self) -> T {
 		self.response_data
+	}
+}
+
+impl
+	ApiResponse<crate::protobufs::service_phone::CPhone_IsAccountWaitingForEmailConfirmation_Response>
+{
+	/// Raw optional `seconds_to_wait`, available even for a non-OK Steam result or
+	/// `awaiting_email_confirmation = false`. This is not an attempt count or an
+	/// HTTP Retry-After value; the schema does not specify throttle semantics.
+	pub fn seconds_to_wait(&self) -> Option<u32> {
+		self.response_data.seconds_to_wait
 	}
 }
 
