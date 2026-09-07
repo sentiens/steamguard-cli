@@ -69,6 +69,8 @@ impl reqwest::dns::Resolve for TestResolver {
 pub struct WebApiTransport {
 	client: reqwest::blocking::Client,
 	bounded_responses: bool,
+	#[cfg(feature = "test-endpoints")]
+	proxy_host_ip: Option<std::net::IpAddr>,
 }
 
 impl fmt::Debug for WebApiTransport {
@@ -84,6 +86,9 @@ impl WebApiTransport {
 		Self {
 			client,
 			bounded_responses: false,
+			// An externally built client's proxy configuration cannot be inspected.
+			#[cfg(feature = "test-endpoints")]
+			proxy_host_ip: None,
 		}
 	}
 
@@ -101,7 +106,11 @@ impl WebApiTransport {
 			))),
 			None => builder,
 		};
-		Self::from_proxy_client(builder.build())
+		Self::from_proxy_client(
+			builder.build(),
+			#[cfg(feature = "test-endpoints")]
+			proxy.host_ip(),
+		)
 	}
 
 	/// Installs a recording, always-failing resolver on the approved proxy factory path.
@@ -154,16 +163,32 @@ impl WebApiTransport {
 
 	fn from_proxy_client(
 		client: Result<reqwest::blocking::Client, reqwest::Error>,
+		#[cfg(feature = "test-endpoints")] proxy_host_ip: Option<std::net::IpAddr>,
 	) -> Result<Self, ProxyTransportError> {
 		Ok(Self {
 			client: client.map_err(|_| ProxyTransportError::ClientBuild)?,
 			bounded_responses: true,
+			#[cfg(feature = "test-endpoints")]
+			proxy_host_ip,
 		})
 	}
 }
 
-// Test endpoint overrides must never fall back to a live Steam host. Require a
-// literal loopback address so validation itself cannot perform DNS resolution.
+// A service base must be HTTP(S), with either a literal loopback destination or
+// a literal loopback proxy from the approved client factory. Validation never
+// resolves names or rereads proxy environment variables.
+#[cfg(feature = "test-endpoints")]
+fn require_loopback_route(
+	url: &Url,
+	proxy_host_ip: Option<std::net::IpAddr>,
+) -> Result<(), NetworkError> {
+	if matches!(url.scheme(), "http" | "https") && proxy_host_ip.is_some_and(|ip| ip.is_loopback())
+	{
+		return Ok(());
+	}
+	require_loopback_base(url)
+}
+
 #[cfg(feature = "test-endpoints")]
 pub(super) fn require_loopback_base(url: &Url) -> Result<(), NetworkError> {
 	let loopback = url
@@ -213,7 +238,13 @@ pub(crate) fn send_web(
 	client: &reqwest::blocking::Client,
 	request: WebRequest<'_>,
 ) -> Result<WebResponse, NetworkError> {
-	send_web_with_limits(client, request, false)
+	send_web_with_limits(
+		client,
+		request,
+		false,
+		#[cfg(feature = "test-endpoints")]
+		None,
+	)
 }
 
 fn send(
@@ -235,12 +266,14 @@ fn send_web_with_limits(
 	client: &reqwest::blocking::Client,
 	request: WebRequest<'_>,
 	bounded: bool,
+	#[cfg(feature = "test-endpoints")] proxy_host_ip: Option<std::net::IpAddr>,
 ) -> Result<WebResponse, NetworkError> {
 	#[cfg(feature = "test-endpoints")]
 	if !matches!(request.endpoint, WebEndpoint::Test(_)) {
-		require_loopback_base(
+		require_loopback_route(
 			&Url::parse(endpoints::community_base_url())
 				.map_err(|_| NetworkError::invalid_request())?,
+			proxy_host_ip,
 		)?;
 	}
 	let endpoint = request.endpoint.name();
@@ -353,7 +386,10 @@ impl Transport for WebApiTransport {
 
 		let url = apireq.build_url();
 		#[cfg(feature = "test-endpoints")]
-		require_loopback_base(&Url::parse(&url).map_err(|_| NetworkError::invalid_request())?)?;
+		require_loopback_route(
+			&Url::parse(&url).map_err(|_| NetworkError::invalid_request())?,
+			self.proxy_host_ip,
+		)?;
 		debug!("HTTP Request method: {}", Req::method());
 		trace!("HTTP request metadata: {apireq:#?}");
 		let mut req = self.client.request(Req::method(), &url);
@@ -438,7 +474,13 @@ impl Transport for WebApiTransport {
 	}
 
 	fn send_web(&self, request: WebRequest<'_>) -> Result<WebResponse, NetworkError> {
-		send_web_with_limits(&self.client, request, self.bounded_responses)
+		send_web_with_limits(
+			&self.client,
+			request,
+			self.bounded_responses,
+			#[cfg(feature = "test-endpoints")]
+			self.proxy_host_ip,
+		)
 	}
 
 	fn close(&mut self) {}
@@ -967,3 +1009,7 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(all(test, feature = "test-endpoints"))]
+#[path = "tests/endpoint_guard.rs"]
+mod endpoint_guard_tests;

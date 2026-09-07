@@ -92,6 +92,12 @@ impl ProxyConfig {
 		}
 		Ok(proxy)
 	}
+
+	/// Literal host of the same parsed URL used to configure reqwest; never resolves DNS.
+	#[cfg(feature = "test-endpoints")]
+	pub(crate) fn host_ip(&self) -> Option<std::net::IpAddr> {
+		self.url.host_str()?.trim_matches(['[', ']']).parse().ok()
+	}
 }
 
 impl fmt::Debug for ProxyConfig {

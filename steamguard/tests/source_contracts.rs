@@ -195,7 +195,8 @@ fn proxied_client_uses_only_pinned_webpki_roots() {
 			"letbuilder=match&proxy.test_resolver{",
 			"Some(resolver)=>builder.dns_resolver(std::sync::Arc::new(TestResolver(",
 			"std::sync::Arc::clone(resolver),))),None=>builder,};",
-			"Self::from_proxy_client(builder.build())}"
+			"Self::from_proxy_client(builder.build(),",
+			"#[cfg(feature=\"test-endpoints\")]proxy.host_ip(),)}"
 		)
 	);
 	assert_eq!(
@@ -213,7 +214,7 @@ fn proxied_client_uses_only_pinned_webpki_roots() {
 		compact_function(source, "fn from_proxy_client(")
 			== concat!(
 				"{Ok(Self{client:client.map_err(|_|ProxyTransportError::ClientBuild)?,",
-				"bounded_responses:true,})}"
+				"bounded_responses:true,#[cfg(feature=\"test-endpoints\")]proxy_host_ip,})}"
 			),
 		"approved client finalization changed"
 	);

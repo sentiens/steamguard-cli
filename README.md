@@ -131,9 +131,16 @@ Credentials login now checks the RSA response's `EResult` before using key field
 Every non-OK result stops before begin-auth, even when key fields are present;
 `LoginError::eresult().map(EResult::code)` retains the exact rejection code.
 
-With `test-endpoints`, the transport refuses API, login, and community base URLs
-unless their host is a literal loopback IP and their scheme is HTTP(S). Missing
-overrides therefore fail locally instead of contacting Steam. Explicit
+E4-FORK-05b: with `test-endpoints`, API, login, and community base URLs must
+use HTTP(S), and either the base host or the configured proxy host must be a
+literal loopback IP (`IpAddr::is_loopback()`). Thus remote `.invalid` fixture
+names can reach a loopback HTTP/HTTPS/socks5h proxy. The proxy IP is captured
+from the configuration used by `new_with_proxy` at client construction, retained
+by clones, and never read from environment variables or resolved through DNS.
+Externally supplied clients have no trusted proxy metadata. The existing factory
+policy still rejects `socks5` (local destination DNS). Without a qualifying proxy,
+missing overrides and non-loopback bases fail locally with `InvalidRequest` /
+`RequestSent::No`; named and non-loopback proxies do not grant an exception. Explicit
 `WebEndpoint::Test` URLs used by the synthetic `.invalid` proxy/DNS tests remain
 separate from these service base URLs; their stands use loopback proxies or a
 resolver that refuses DNS.
